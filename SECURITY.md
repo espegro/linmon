@@ -227,10 +227,19 @@ Edit `/etc/logrotate.d/linmond` to adjust:
 
 ## Installation Security Checklist
 
+**Note on Group Names**: Different Linux distributions use different group names for the unprivileged user:
+- **Debian/Ubuntu**: Use `nobody:nogroup`
+- **RHEL/Rocky/CentOS/AlmaLinux**: Use `nobody:nobody`
+
+The Makefile and install.sh scripts automatically detect and use the correct group for your distribution.
+
 ```bash
 # 1. Create log directory with proper permissions
 sudo mkdir -p /var/log/linmon
+# Ubuntu/Debian:
 sudo chown nobody:nogroup /var/log/linmon
+# RHEL/Rocky/CentOS:
+# sudo chown nobody:nobody /var/log/linmon
 sudo chmod 0750 /var/log/linmon
 
 # 2. Secure config file

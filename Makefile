@@ -86,13 +86,19 @@ clean:
 install: $(BUILD_DIR)/$(DAEMON)
 	install -D -m 755 $(BUILD_DIR)/$(DAEMON) /usr/local/sbin/$(DAEMON)
 	install -D -m 644 $(DAEMON).service /etc/systemd/system/$(DAEMON).service
-	install -D -m 644 $(DAEMON).logrotate /etc/logrotate.d/$(DAEMON)
 	mkdir -p /etc/linmon
 	if [ ! -f /etc/linmon/linmon.conf ]; then \
 		install -D -m 600 linmon.conf /etc/linmon/linmon.conf; \
 	fi
 	mkdir -p /var/log/linmon
-	chown nobody:nogroup /var/log/linmon
+	@if getent group nogroup >/dev/null 2>&1; then \
+		chown nobody:nogroup /var/log/linmon; \
+		sed 's/nobody nogroup/nobody nogroup/' $(DAEMON).logrotate > /etc/logrotate.d/$(DAEMON); \
+	else \
+		chown nobody:nobody /var/log/linmon; \
+		sed 's/nobody nogroup/nobody nobody/' $(DAEMON).logrotate > /etc/logrotate.d/$(DAEMON); \
+	fi
+	chmod 0644 /etc/logrotate.d/$(DAEMON)
 	chmod 0750 /var/log/linmon
 	systemctl daemon-reload
 

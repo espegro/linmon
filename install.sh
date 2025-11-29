@@ -15,14 +15,21 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Detect nobody group (Debian/Ubuntu use 'nogroup', RHEL/Rocky use 'nobody')
+if getent group nogroup >/dev/null 2>&1; then
+    NOBODY_GROUP="nogroup"
+else
+    NOBODY_GROUP="nobody"
+fi
+
 echo -e "${GREEN}=== LinMon Installation ===${NC}"
 
 # 1. Create log directory with proper permissions
 echo -e "${YELLOW}[1/6]${NC} Creating log directory..."
 mkdir -p /var/log/linmon
-chown nobody:nogroup /var/log/linmon
+chown nobody:${NOBODY_GROUP} /var/log/linmon
 chmod 0750 /var/log/linmon
-echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: nobody:nogroup, mode: 0750)"
+echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
 
 # 2. Create and secure config directory
 echo -e "${YELLOW}[2/6]${NC} Installing configuration..."
@@ -65,7 +72,8 @@ fi
 # 4.5. Install logrotate config
 echo -e "${YELLOW}[4.5/6]${NC} Installing logrotate configuration..."
 if [ -f linmond.logrotate ]; then
-    cp linmond.logrotate /etc/logrotate.d/linmond
+    # Adjust group name for distro (nogroup for Debian/Ubuntu, nobody for RHEL/Rocky)
+    sed "s/nobody nogroup/nobody ${NOBODY_GROUP}/" linmond.logrotate > /etc/logrotate.d/linmond
     chmod 0644 /etc/logrotate.d/linmond
     echo -e "${GREEN}✓${NC} Installed logrotate config to /etc/logrotate.d/linmond"
 else
@@ -143,7 +151,7 @@ echo -e "Logrotate: /etc/logrotate.d/linmond"
 echo -e "Service:   systemctl status linmond"
 echo -e "\n${GREEN}Security features enabled:${NC}"
 echo -e "  ✓ Capability dropping (all capabilities cleared)"
-echo -e "  ✓ UID/GID dropping (runs as nobody:nogroup)"
+echo -e "  ✓ UID/GID dropping (runs as nobody:${NOBODY_GROUP})"
 echo -e "  ✓ Config file validation (permissions checked)"
 echo -e "  ✓ Path traversal protection (log_file validated)"
 echo -e "  ✓ Systemd hardening (if service installed)"
