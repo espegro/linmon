@@ -370,6 +370,180 @@ static int update_network_filters(int map_fd, const struct linmon_config *config
     return 0;
 }
 
+// Smart BPF program attachment with fallback
+// Tries tracepoint first, falls back to kprobe if tracepoint is blocked (RHEL 9)
+static struct bpf_link *attach_prog_with_fallback(
+    struct bpf_program *tp_prog,  // Tracepoint version
+    struct bpf_program *kp_prog,  // Kprobe version (fallback)
+    const char *name)              // Program name for logging
+{
+    struct bpf_link *link = NULL;
+    int err;
+
+    // Try tracepoint first (preferred - lower overhead)
+    if (tp_prog) {
+        link = bpf_program__attach(tp_prog);
+        err = libbpf_get_error(link);
+
+        if (!err) {
+            // Success!
+            printf("  ✓ %s (tracepoint)\n", name);
+            return link;
+        }
+
+        // If error is not EPERM, it's a real error
+        if (err != -EPERM && err != -EACCES) {
+            fprintf(stderr, "  ✗ %s (tracepoint): %s\n", name, strerror(-err));
+            return NULL;
+        }
+
+        // EPERM means tracepoint is blocked, try kprobe
+        printf("  ! %s: tracepoint blocked, trying kprobe...\n", name);
+        link = NULL;  // Clear failed link
+    }
+
+    // Try kprobe fallback
+    if (kp_prog) {
+        link = bpf_program__attach(kp_prog);
+        err = libbpf_get_error(link);
+
+        if (!err) {
+            printf("  ✓ %s (kprobe fallback)\n", name);
+            return link;
+        }
+
+        fprintf(stderr, "  ✗ %s (kprobe): %s\n", name, strerror(-err));
+        return NULL;
+    }
+
+    fprintf(stderr, "  ✗ %s: no fallback available\n", name);
+    return NULL;
+}
+
+// Manual BPF program attachment with smart fallback for syscall monitors
+static int attach_bpf_programs(struct linmon_bpf *skel)
+{
+    struct bpf_link *link;
+    int attached_count = 0;
+    int failed_count = 0;
+
+    printf("Attaching BPF programs...\n");
+
+    // Process monitoring (always available - uses sched tracepoints, not syscall)
+    link = bpf_program__attach(skel->progs.handle_exec);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "✗ CRITICAL: Failed to attach process exec monitor\n");
+        return -1;
+    }
+    printf("  ✓ Process exec monitoring\n");
+    attached_count++;
+
+    link = bpf_program__attach(skel->progs.handle_exit);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "✗ CRITICAL: Failed to attach process exit monitor\n");
+        return -1;
+    }
+    printf("  ✓ Process exit monitoring\n");
+    attached_count++;
+
+    // File monitoring (with fallback)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_openat_tp,
+        skel->progs.handle_openat_kp,
+        "File open/create monitoring");
+    if (!link) failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_unlinkat_tp,
+        skel->progs.handle_unlinkat_kp,
+        "File delete monitoring");
+    if (!link) failed_count++; else attached_count++;
+
+    // Network monitoring (kprobes - always available)
+    link = bpf_program__attach(skel->progs.tcp_connect_enter);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ TCP connect monitoring failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ TCP connect monitoring\n");
+        attached_count++;
+    }
+
+    link = bpf_program__attach(skel->progs.tcp_v4_connect_enter);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ TCP v4 connect monitoring failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ TCP v4 connect monitoring\n");
+        attached_count++;
+    }
+
+    link = bpf_program__attach(skel->progs.inet_accept_exit);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ TCP accept monitoring failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ TCP accept monitoring\n");
+        attached_count++;
+    }
+
+    link = bpf_program__attach(skel->progs.udp_sendmsg_enter);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ UDP send monitoring failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ UDP send monitoring\n");
+        attached_count++;
+    }
+
+    link = bpf_program__attach(skel->progs.udpv6_sendmsg_enter);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ UDPv6 send monitoring failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ UDPv6 send monitoring\n");
+        attached_count++;
+    }
+
+    // Privilege monitoring (with fallback)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_setuid_tp,
+        skel->progs.handle_setuid_kp,
+        "Setuid monitoring");
+    if (!link) failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_setgid_tp,
+        skel->progs.handle_setgid_kp,
+        "Setgid monitoring");
+    if (!link) failed_count++; else attached_count++;
+
+    // Privilege escalation detection (sudo/su/pkexec - always available via exec monitoring)
+    link = bpf_program__attach(skel->progs.handle_privilege_exec);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ Privilege escalation detection failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ Sudo/su/pkexec detection\n");
+        attached_count++;
+    }
+
+    printf("\nAttachment summary: %d programs attached", attached_count);
+    if (failed_count > 0) {
+        printf(" (%d failed - some features may be unavailable)\n", failed_count);
+    } else {
+        printf(" (all features available)\n");
+    }
+
+    // We require at least process and network monitoring to work
+    if (attached_count < 4) {
+        fprintf(stderr, "\nCRITICAL: Too few monitors attached. Cannot continue.\n");
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     struct linmon_bpf *skel = NULL;
@@ -481,22 +655,12 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    // Attach all BPF programs
-    err = linmon_bpf__attach(skel);
+    // Attach all BPF programs with smart fallback (tracepoint → kprobe for RHEL 9)
+    err = attach_bpf_programs(skel);
     if (err) {
         fprintf(stderr, "Failed to attach LinMon BPF programs: %d\n", err);
         goto cleanup;
     }
-
-    printf("✓ All monitoring programs attached\n");
-    printf("  - Process exec/exit monitoring\n");
-    if (global_config.monitor_files)
-        printf("  - File create/modify/delete monitoring (with rate limiting)\n");
-    if (global_config.monitor_tcp)
-        printf("  - TCP connect/accept monitoring\n");
-    if (global_config.monitor_udp)
-        printf("  - UDP send monitoring\n");
-    printf("  - Privilege escalation monitoring (sudo/su/setuid/setgid)\n");
 
     // Drop UID/GID to nobody user if running as root
     // IMPORTANT: This must be done BEFORE dropping capabilities

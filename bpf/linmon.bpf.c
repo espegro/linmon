@@ -308,14 +308,11 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 // FILE MONITORING
 // ============================================================================
 
-// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
-// SEC("tp/syscalls/sys_enter_openat")
-int handle_openat__disabled(struct trace_event_raw_sys_enter *ctx)
+// Helper function for openat monitoring (shared between tracepoint and kprobe)
+static __always_inline int handle_openat_common(const char *filename, int flags)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct file_event *event;
-    const char *filename;
-    int flags;
 
     // Check UID filtering
     if (!should_monitor_uid(uid))
@@ -324,10 +321,6 @@ int handle_openat__disabled(struct trace_event_raw_sys_enter *ctx)
     // Rate limiting
     if (should_rate_limit(uid))
         return 0;
-
-    // Read arguments
-    filename = (const char *)ctx->args[1];
-    flags = (int)ctx->args[2];
 
     // Only log if opening for write or create
     if (!(flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)))
@@ -350,21 +343,35 @@ int handle_openat__disabled(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
-// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
-// SEC("tp/syscalls/sys_enter_unlinkat")
-int handle_unlinkat__disabled(struct trace_event_raw_sys_enter *ctx)
+// Tracepoint version (Ubuntu/modern kernels)
+SEC("tp/syscalls/sys_enter_openat")
+int handle_openat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    const char *filename = (const char *)ctx->args[1];
+    int flags = (int)ctx->args[2];
+    return handle_openat_common(filename, flags);
+}
+
+// Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
+SEC("kprobe/__x64_sys_openat")
+int handle_openat_kp(struct pt_regs *ctx)
+{
+    const char *filename = (const char *)PT_REGS_PARM2(ctx);
+    int flags = (int)PT_REGS_PARM3(ctx);
+    return handle_openat_common(filename, flags);
+}
+
+// Helper function for unlinkat monitoring (shared between tracepoint and kprobe)
+static __always_inline int handle_unlinkat_common(const char *filename)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct file_event *event;
-    const char *filename;
 
     if (!should_monitor_uid(uid))
         return 0;
 
     if (should_rate_limit(uid))
         return 0;
-
-    filename = (const char *)ctx->args[1];
 
     event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
@@ -381,6 +388,22 @@ int handle_unlinkat__disabled(struct trace_event_raw_sys_enter *ctx)
 
     bpf_ringbuf_submit(event, 0);
     return 0;
+}
+
+// Tracepoint version (Ubuntu/modern kernels)
+SEC("tp/syscalls/sys_enter_unlinkat")
+int handle_unlinkat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    const char *filename = (const char *)ctx->args[1];
+    return handle_unlinkat_common(filename);
+}
+
+// Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
+SEC("kprobe/__x64_sys_unlinkat")
+int handle_unlinkat_kp(struct pt_regs *ctx)
+{
+    const char *filename = (const char *)PT_REGS_PARM2(ctx);
+    return handle_unlinkat_common(filename);
 }
 
 // ============================================================================
@@ -851,14 +874,12 @@ int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
     return 0;
 }
 
-// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
-// SEC("tp/syscalls/sys_enter_setuid")
-int handle_setuid__disabled(struct trace_event_raw_sys_enter *ctx)
+// Helper function for setuid monitoring (shared between tracepoint and kprobe)
+static __always_inline int handle_setuid_common(__u32 new_uid)
 {
     struct privilege_event *event;
     __u64 uid_gid = bpf_get_current_uid_gid();
     __u32 old_uid = uid_gid & 0xFFFFFFFF;
-    __u32 new_uid = (__u32)ctx->args[0];
 
     // Only log if changing to a different UID
     if (old_uid == new_uid)
@@ -887,14 +908,28 @@ int handle_setuid__disabled(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
-// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
-// SEC("tp/syscalls/sys_enter_setgid")
-int handle_setgid__disabled(struct trace_event_raw_sys_enter *ctx)
+// Tracepoint version (Ubuntu/modern kernels)
+SEC("tp/syscalls/sys_enter_setuid")
+int handle_setuid_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    __u32 new_uid = (__u32)ctx->args[0];
+    return handle_setuid_common(new_uid);
+}
+
+// Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
+SEC("kprobe/__x64_sys_setuid")
+int handle_setuid_kp(struct pt_regs *ctx)
+{
+    __u32 new_uid = (__u32)PT_REGS_PARM1(ctx);
+    return handle_setuid_common(new_uid);
+}
+
+// Helper function for setgid monitoring (shared between tracepoint and kprobe)
+static __always_inline int handle_setgid_common(__u32 new_gid)
 {
     struct privilege_event *event;
     __u64 uid_gid = bpf_get_current_uid_gid();
     __u32 old_gid = uid_gid >> 32;
-    __u32 new_gid = (__u32)ctx->args[0];
 
     // Only log if changing to a different GID
     if (old_gid == new_gid)
@@ -921,4 +956,20 @@ int handle_setgid__disabled(struct trace_event_raw_sys_enter *ctx)
 
     bpf_ringbuf_submit(event, 0);
     return 0;
+}
+
+// Tracepoint version (Ubuntu/modern kernels)
+SEC("tp/syscalls/sys_enter_setgid")
+int handle_setgid_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    __u32 new_gid = (__u32)ctx->args[0];
+    return handle_setgid_common(new_gid);
+}
+
+// Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
+SEC("kprobe/__x64_sys_setgid")
+int handle_setgid_kp(struct pt_regs *ctx)
+{
+    __u32 new_gid = (__u32)PT_REGS_PARM1(ctx);
+    return handle_setgid_common(new_gid);
 }
