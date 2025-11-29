@@ -37,11 +37,11 @@ struct {
     __type(value, struct rate_limit_state);
 } rate_limit_map SEC(".maps");
 
-// Network CIDR filtering map - stores up to 32 CIDR blocks to ignore
+// Network CIDR filtering map - stores up to 16 CIDR blocks to ignore
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 32);  // Support up to 32 CIDR blocks
-    __type(key, __u32);       // Index (0-31)
+    __uint(max_entries, 16);  // Reduced from 32 for RHEL 9 BPF verifier compatibility
+    __type(key, __u32);       // Index (0-15)
     __type(value, struct network_cidr);
 } ignore_networks_map SEC(".maps");
 
@@ -172,18 +172,19 @@ static __always_inline bool should_ignore_network(__u32 addr)
 {
     struct network_cidr *cidr;
 
-    // Iterate through all configured CIDR blocks (max 32)
-    for (__u32 i = 0; i < 32; i++) {
-        cidr = bpf_map_lookup_elem(&ignore_networks_map, &i);
-        if (!cidr)
-            break;  // No more entries
+    // Manually unrolled loop for RHEL 9 / kernel 5.14 compatibility
+    // The BPF verifier in older kernels doesn't support bounded loops well
+    // Reduced from 32 to 16 max CIDR blocks for code size
+    #define CHECK_CIDR(idx) \
+        cidr = bpf_map_lookup_elem(&ignore_networks_map, &(int){idx}); \
+        if (cidr && ((addr & cidr->mask) == cidr->addr)) return true;
 
-        // Check if address matches this CIDR block
-        // (addr & mask) == network
-        if ((addr & cidr->mask) == cidr->addr)
-            return true;  // Address is in ignored range
-    }
+    CHECK_CIDR(0);  CHECK_CIDR(1);  CHECK_CIDR(2);  CHECK_CIDR(3);
+    CHECK_CIDR(4);  CHECK_CIDR(5);  CHECK_CIDR(6);  CHECK_CIDR(7);
+    CHECK_CIDR(8);  CHECK_CIDR(9);  CHECK_CIDR(10); CHECK_CIDR(11);
+    CHECK_CIDR(12); CHECK_CIDR(13); CHECK_CIDR(14); CHECK_CIDR(15);
 
+    #undef CHECK_CIDR
     return false;  // Address not in any ignored range
 }
 
