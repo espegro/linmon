@@ -308,8 +308,9 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 // FILE MONITORING
 // ============================================================================
 
-SEC("tp/syscalls/sys_enter_openat")
-int handle_openat(struct trace_event_raw_sys_enter *ctx)
+// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
+// SEC("tp/syscalls/sys_enter_openat")
+int handle_openat__disabled(struct trace_event_raw_sys_enter *ctx)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct file_event *event;
@@ -349,8 +350,9 @@ int handle_openat(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
-SEC("tp/syscalls/sys_enter_unlinkat")
-int handle_unlinkat(struct trace_event_raw_sys_enter *ctx)
+// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
+// SEC("tp/syscalls/sys_enter_unlinkat")
+int handle_unlinkat__disabled(struct trace_event_raw_sys_enter *ctx)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct file_event *event;
@@ -849,8 +851,9 @@ int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
     return 0;
 }
 
-SEC("tp/syscalls/sys_enter_setuid")
-int handle_setuid(struct trace_event_raw_sys_enter *ctx)
+// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
+// SEC("tp/syscalls/sys_enter_setuid")
+int handle_setuid__disabled(struct trace_event_raw_sys_enter *ctx)
 {
     struct privilege_event *event;
     __u64 uid_gid = bpf_get_current_uid_gid();
@@ -884,8 +887,9 @@ int handle_setuid(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
-SEC("tp/syscalls/sys_enter_setgid")
-int handle_setgid(struct trace_event_raw_sys_enter *ctx)
+// Disabled on RHEL 9: syscall tracepoints blocked by kernel security
+// SEC("tp/syscalls/sys_enter_setgid")
+int handle_setgid__disabled(struct trace_event_raw_sys_enter *ctx)
 {
     struct privilege_event *event;
     __u64 uid_gid = bpf_get_current_uid_gid();
