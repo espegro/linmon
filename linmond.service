@@ -1,6 +1,6 @@
 [Unit]
 Description=LinMon eBPF System Monitor
-Documentation=https://github.com/your-repo/linmon
+Documentation=https://github.com/espegro/linmon
 After=network.target
 
 [Service]
