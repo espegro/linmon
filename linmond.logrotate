@@ -1,0 +1,32 @@
+/var/log/linmon/*.json {
+    # Rotate daily or when file reaches 100MB
+    daily
+    size 100M
+
+    # Keep 30 days of logs
+    rotate 30
+
+    # Compress old logs (saves disk space)
+    compress
+    delaycompress
+
+    # Don't error if log file is missing
+    missingok
+
+    # Don't rotate if empty
+    notifempty
+
+    # Create new log file with correct permissions
+    create 0640 nobody nogroup
+
+    # Use date as suffix instead of numbers
+    dateext
+    dateformat -%Y%m%d
+
+    # Send SIGHUP to linmond after rotation to reopen log file
+    postrotate
+        if systemctl is-active linmond >/dev/null 2>&1; then
+            systemctl reload linmond >/dev/null 2>&1 || true
+        fi
+    endscript
+}

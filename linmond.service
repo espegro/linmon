@@ -1,0 +1,57 @@
+[Unit]
+Description=LinMon eBPF System Monitor
+Documentation=https://github.com/your-repo/linmon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/linmond -c /etc/linmon/linmon.conf
+Restart=always
+RestartSec=5
+
+# Security Hardening
+# Note: Cannot use NoNewPrivileges - linmond needs CAP_SYS_ADMIN to load BPF before dropping privileges
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/linmon
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+# Seccomp filter - Allow syscalls needed for eBPF and privilege dropping
+# Based on strace analysis - these are the minimum required syscalls
+SystemCallFilter=@system-service @file-system @io-event @network-io @basic-io
+SystemCallFilter=bpf perf_event_open setuid setgid capset capget setrlimit
+SystemCallFilter=epoll_create1 epoll_ctl epoll_wait epoll_pwait
+SystemCallFilter=mmap munmap mremap mprotect
+SystemCallFilter=prctl prlimit64 getrandom uname
+SystemCallFilter=rt_sigaction rt_sigreturn set_tid_address set_robust_list
+SystemCallFilter=rseq arch_prctl
+
+# NOTE: These hardening options are disabled because they conflict with eBPF:
+# - NoNewPrivileges: linmond needs to load BPF as root then drop privileges
+# - RestrictNamespaces: may interfere with BPF map pinning
+# - MemoryDenyWriteExecute: BPF JIT compilation needs executable memory
+# - ProtectKernelModules: needed for BPF loading
+# - RestrictSUIDSGID: linmond calls setuid/setgid to drop privileges
+
+# Resource Limits
+LimitNOFILE=65536
+MemoryMax=512M
+CPUQuota=50%
+TasksMax=256
+
+# OOM Protection
+OOMScoreAdjust=-900
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=linmond
+
+[Install]
+WantedBy=multi-user.target

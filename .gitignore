@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+*.o
+*.so
+*.a
+
+# BPF skeletons (generated)
+src/*.skel.h
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled binaries
+linmond
+
+# Logs
+*.log
+
+# Test files
+test-filters.conf
+startup
+
+# Claude Code
+.claude/
