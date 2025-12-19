@@ -4,14 +4,35 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 
 ## Features
 
-- **Process Monitoring**: Track process execution and termination with full details
-- **Interactive User Focus**: Automatically filters to only log activity from users with TTY sessions
-- **UID/GID Filtering**: Configurable filtering to ignore system users (UID < 1000 by default)
-- **Process Name Filtering**: Whitelist/blacklist specific processes
-- **Sensitive Data Redaction**: Automatically redact passwords, tokens, and API keys from command lines
-- **Command-line Capture**: Optional full argument capture
-- **eBPF/CO-RE**: Portable across kernel versions - compile once, run everywhere (kernel >= 5.8)
+### Core Monitoring
+- **Process Monitoring**: Track execution and termination with full command-line arguments
+- **Network Monitoring**: TCP connections (connect/accept) and UDP traffic with IPv4/IPv6 support
+- **File Monitoring**: Track file create, modify, delete operations
+- **Privilege Escalation**: Detect setuid, setgid, and sudo usage
+
+### Advanced Filtering
+- **UID/GID Filtering**: Configurable to ignore system users (default: UID < 1000)
+- **TTY Filtering**: Optional filtering to only log interactive terminal sessions
+- **Process Filtering**: Whitelist/blacklist by process name
+- **Network CIDR Filtering**: Ignore traffic to private networks (kernel-level filtering)
+- **File Path Filtering**: Ignore /tmp, /proc, /sys by prefix matching
+- **Thread Filtering**: Optionally ignore threads, only log main processes
+- **Rate Limiting**: Token bucket algorithm (20 burst, 100 events/sec per UID) prevents flooding
+
+### Security & Privacy
+- **Sensitive Data Redaction**: Automatically redact passwords, tokens, API keys from command lines
+- **Binary Hashing**: Optional SHA256 hashing of executed binaries for integrity monitoring
+- **Privilege Dropping**: Daemon runs as `nobody` (UID 65534) after BPF load, zero capabilities
+- **Hardened systemd**: Full security hardening with seccomp, ProtectSystem, PrivateTmp
+- **Config Validation**: Path traversal protection, permission checks, integer overflow prevention
+
+### Performance & Reliability
+- **eBPF/CO-RE**: Compile once, run everywhere (kernel >= 5.8)
 - **Low Overhead**: Efficient kernel-space filtering minimizes performance impact
+- **Username Resolution**: Cached UID→username lookups (256 entry cache)
+- **File Hash Caching**: LRU cache (1000 entries) for binary hashes
+- **Log Rotation**: Automatic rotation with logrotate (30 days, 100MB limit)
+- **Config Reload**: SIGHUP support for live config updates without restart
 
 ## Architecture
 
@@ -171,17 +192,124 @@ Key configuration options:
 
 ## Logs
 
-Events are logged to:
-- `/var/log/linmon/events.json` - JSON-formatted event log with timestamps
-- Syslog integration (optional)
+Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSON object per line):
 
-**Log Rotation**: LinMon includes a logrotate configuration (`/etc/logrotate.d/linmond`) that:
-- Rotates logs daily or when they reach 100MB
+```json
+{"timestamp":"2024-11-30T10:15:30.123Z","type":"process_exec","pid":12345,"ppid":1234,"uid":1000,"username":"alice","comm":"bash","filename":"/usr/bin/bash","cmdline":"/bin/bash -c ls","sha256":"abc123..."}
+{"timestamp":"2024-11-30T10:15:31.456Z","type":"net_connect_tcp","pid":12346,"uid":1000,"username":"alice","comm":"curl","saddr":"192.168.1.100","daddr":"1.1.1.1","sport":54321,"dport":443}
+```
+
+**Event Types**:
+- `process_exec`, `process_exit` - Process execution and termination
+- `net_connect_tcp`, `net_accept_tcp` - TCP connections
+- `net_send_udp` - UDP traffic
+- `file_open`, `file_create`, `file_delete`, `file_modify` - File operations
+- `priv_setuid`, `priv_setgid`, `priv_sudo` - Privilege escalation
+
+**Log Rotation**: Automatic rotation via logrotate:
+- Rotates daily or at 100MB
 - Keeps 30 days of compressed logs
 - Maintains proper permissions (0640 nobody:nogroup)
 
-Installed automatically by `make install` or `./install.sh`.
+## Monitoring & Analysis
+
+### Quick Start Queries
+
+```bash
+# View last 10 events
+tail -10 /var/log/linmon/events.json | jq
+
+# Follow events in real-time
+tail -f /var/log/linmon/events.json | jq
+
+# Find all sudo usage
+grep '"type":"priv_sudo"' /var/log/linmon/events.json | jq
+
+# Show process executions by user
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq -r '[.timestamp, .username, .cmdline] | @tsv' | column -t
+
+# Detect suspicious network connections
+grep '"type":"net_connect_tcp"' /var/log/linmon/events.json | \
+  jq 'select(.dport != 80 and .dport != 443 and .dport != 22)'
+```
+
+### Integration with Monitoring Systems
+
+LinMon integrates with:
+- **ELK Stack**: Use Filebeat to ship JSON logs to Elasticsearch
+- **Splunk**: Configure as JSON sourcetype for security monitoring
+- **Grafana**: Use mtail or similar to export metrics from logs
+- **Custom**: Parse JSON with `jq`, `python`, or your preferred tool
+
+See **[MONITORING.md](MONITORING.md)** for:
+- Complete query examples
+- Security detection patterns
+- Integration guides (ELK, Splunk, Grafana)
+- Alerting examples (email, Slack, systemd)
+- Performance monitoring
+- Troubleshooting guide
+
+## Operational Tasks
+
+### Health Check
+```bash
+# Check daemon status
+sudo systemctl status linmond
+
+# View recent logs
+sudo journalctl -u linmond -n 50
+
+# Verify events are being logged
+tail -5 /var/log/linmon/events.json
+```
+
+### Reload Configuration
+```bash
+# After editing /etc/linmon/linmon.conf
+sudo systemctl reload linmond
+
+# Or send SIGHUP directly
+sudo pkill -HUP linmond
+```
+
+### Troubleshooting
+
+**No events logged**:
+```bash
+# Check UID filtering
+id  # Your UID should be >= min_uid in config
+grep min_uid /etc/linmon/linmon.conf
+
+# Test with known activity
+ls /tmp
+grep "$(whoami)" /var/log/linmon/events.json | tail -5
+```
+
+**Too many events**:
+```bash
+# Find noisy processes
+jq -r '.comm' /var/log/linmon/events.json | sort | uniq -c | sort -rn | head -20
+
+# Add to ignore_processes in config
+sudo vi /etc/linmon/linmon.conf  # Add: ignore_processes = chrome,firefox
+sudo systemctl reload linmond
+```
+
+See **[MONITORING.md](MONITORING.md)** for complete troubleshooting guide.
+
+## Documentation
+
+- **[README.md](README.md)** - This file: overview, installation, configuration
+- **[MONITORING.md](MONITORING.md)** - Monitoring guide: queries, alerts, integrations
+- **[SECURITY.md](SECURITY.md)** - Security features and hardening details
+- **[CLAUDE.md](CLAUDE.md)** - Development guide: architecture, building, contributing
 
 ## Development
 
-See `CLAUDE.md` for development guidelines and architecture details.
+See **[CLAUDE.md](CLAUDE.md)** for:
+- Detailed architecture documentation
+- Build system internals
+- Adding new event types
+- eBPF development guidelines
+- Code style and security considerations
