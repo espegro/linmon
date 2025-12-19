@@ -89,6 +89,11 @@ int load_config(struct linmon_config *config, const char *config_file)
                 continue;
             }
             config->log_file = strdup(value);
+            if (!config->log_file) {
+                fprintf(stderr, "Error: Failed to allocate memory for log_file\n");
+                fclose(fp);
+                return -ENOMEM;
+            }
         } else if (strcmp(key, "log_to_syslog") == 0) {
             config->log_to_syslog = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_processes") == 0) {
@@ -107,7 +112,13 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->monitor_tcp = val;
             config->monitor_udp = val;
         } else if (strcmp(key, "verbosity") == 0) {
-            config->verbosity = atoi(value);
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 0 || val > 2) {
+                fprintf(stderr, "Invalid verbosity value: %s (must be 0-2)\n", value);
+                continue;
+            }
+            config->verbosity = (int)val;
         } else if (strcmp(key, "min_uid") == 0) {
             char *endptr;
             unsigned long val = strtoul(value, &endptr, 10);
@@ -137,17 +148,41 @@ int load_config(struct linmon_config *config, const char *config_file)
         } else if (strcmp(key, "hash_binaries") == 0) {
             config->hash_binaries = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "ignore_processes") == 0) {
-            if (strlen(value) > 0)
+            if (strlen(value) > 0) {
                 config->ignore_processes = strdup(value);
+                if (!config->ignore_processes) {
+                    fprintf(stderr, "Error: Failed to allocate memory for ignore_processes\n");
+                    fclose(fp);
+                    return -ENOMEM;
+                }
+            }
         } else if (strcmp(key, "only_processes") == 0) {
-            if (strlen(value) > 0)
+            if (strlen(value) > 0) {
                 config->only_processes = strdup(value);
+                if (!config->only_processes) {
+                    fprintf(stderr, "Error: Failed to allocate memory for only_processes\n");
+                    fclose(fp);
+                    return -ENOMEM;
+                }
+            }
         } else if (strcmp(key, "ignore_networks") == 0) {
-            if (strlen(value) > 0)
+            if (strlen(value) > 0) {
                 config->ignore_networks = strdup(value);
+                if (!config->ignore_networks) {
+                    fprintf(stderr, "Error: Failed to allocate memory for ignore_networks\n");
+                    fclose(fp);
+                    return -ENOMEM;
+                }
+            }
         } else if (strcmp(key, "ignore_file_paths") == 0) {
-            if (strlen(value) > 0)
+            if (strlen(value) > 0) {
                 config->ignore_file_paths = strdup(value);
+                if (!config->ignore_file_paths) {
+                    fprintf(stderr, "Error: Failed to allocate memory for ignore_file_paths\n");
+                    fclose(fp);
+                    return -ENOMEM;
+                }
+            }
         }
     }
 

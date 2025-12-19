@@ -229,7 +229,10 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         }
         struct privilege_event *e = data;
 
-        // Always log privilege escalation events
+        // Apply process filtering to prevent privilege event flooding
+        if (!filter_should_log_process(e->comm))
+            return 0;
+
         logger_log_privilege_event(e);
         break;
     }
@@ -283,12 +286,15 @@ static int parse_cidr(const char *cidr_str, struct network_cidr *out)
     }
 
     *slash = '\0';
-    prefix_len = atoi(slash + 1);
 
-    if (prefix_len < 0 || prefix_len > 32) {
-        fprintf(stderr, "Invalid CIDR prefix length: %d\n", prefix_len);
+    // Parse prefix length with proper error handling
+    char *endptr;
+    long prefix_len_long = strtol(slash + 1, &endptr, 10);
+    if (*endptr != '\0' || prefix_len_long < 0 || prefix_len_long > 32) {
+        fprintf(stderr, "Invalid CIDR prefix length: %s (must be 0-32)\n", slash + 1);
         return -1;
     }
+    prefix_len = (int)prefix_len_long;
 
     // Parse IP address
     if (inet_pton(AF_INET, ip_str, &addr) != 1) {
@@ -331,7 +337,7 @@ static int update_network_filters(int map_fd, const struct linmon_config *config
 
     // Parse comma-separated CIDR blocks
     cidr_token = strtok_r(cidr_list, ",", &saveptr);
-    while (cidr_token && index < 32) {
+    while (cidr_token && index < 16) {  // Max 16 CIDR blocks (BPF map size limit)
         // Trim whitespace
         while (*cidr_token == ' ' || *cidr_token == '\t')
             cidr_token++;
@@ -365,6 +371,11 @@ static int update_network_filters(int map_fd, const struct linmon_config *config
 
     if (index > 0) {
         printf("  Network CIDR filtering: %u block(s) loaded\n", index);
+    }
+
+    // Warn if user tried to configure more than the limit
+    if (cidr_token != NULL) {
+        fprintf(stderr, "Warning: Maximum 16 CIDR blocks supported. Additional entries ignored.\n");
     }
 
     return 0;
@@ -718,51 +729,57 @@ int main(int argc, char **argv)
             err = load_config(&new_config, config_path);
             if (err && err != -ENOENT) {
                 fprintf(stderr, "Failed to reload config: %s\n", strerror(-err));
-            } else {
-                // Update global config
-                free_config(&global_config);
-                global_config = new_config;
-
-                // Update BPF config map
-                err = update_bpf_config(bpf_map__fd(skel->maps.config_map), &global_config);
-                if (err) {
-                    fprintf(stderr, "Warning: Failed to update BPF config: %d\n", err);
-                }
-
-                // Update network CIDR filtering
-                err = update_network_filters(bpf_map__fd(skel->maps.ignore_networks_map), &global_config);
-                if (err) {
-                    fprintf(stderr, "Warning: Failed to update network filters: %d\n", err);
-                }
-
-                // Reinitialize filter
-                filter_init(&global_config);
-
-                // Reopen log file (for logrotate support)
-                // Close old logger and reopen with new/same file
-                logger_cleanup();
-                err = logger_init(global_config.log_file ? global_config.log_file :
-                                 "/var/log/linmon/events.json");
-                if (err) {
-                    fprintf(stderr, "CRITICAL: Failed to reopen log file: %s\n", strerror(-err));
-                    exiting = true;
-                    goto reload_done;
-                }
-
-                // Update logger enrichment options
-                logger_set_enrichment(global_config.resolve_usernames,
-                                     global_config.hash_binaries);
-
-                printf("Configuration reloaded:\n");
-                printf("  UID range: %u-%u\n", global_config.min_uid, global_config.max_uid);
-                printf("  Require TTY: %s\n", global_config.require_tty ? "yes" : "no");
-                printf("  Redact sensitive: %s\n", global_config.redact_sensitive ? "yes" : "no");
-                printf("  Resolve usernames: %s\n", global_config.resolve_usernames ? "yes" : "no");
-                printf("  Hash binaries: %s\n", global_config.hash_binaries ? "yes" : "no");
-                printf("  Log file reopened (logrotate support)\n");
+                reload_config = false;
+                continue;
             }
 
-reload_done:
+            // Initialize new logger BEFORE closing old one (avoid race condition)
+            const char *new_log_file = new_config.log_file ? new_config.log_file : "/var/log/linmon/events.json";
+            FILE *new_log_fp = fopen(new_log_file, "a");
+            if (!new_log_fp) {
+                fprintf(stderr, "CRITICAL: Failed to open new log file %s: %s\n",
+                        new_log_file, strerror(errno));
+                free_config(&new_config);
+                reload_config = false;
+                continue;
+            }
+            setlinebuf(new_log_fp);
+
+            // Update global config
+            free_config(&global_config);
+            global_config = new_config;
+
+            // Update BPF config map
+            err = update_bpf_config(bpf_map__fd(skel->maps.config_map), &global_config);
+            if (err) {
+                fprintf(stderr, "Warning: Failed to update BPF config: %d\n", err);
+            }
+
+            // Update network CIDR filtering
+            err = update_network_filters(bpf_map__fd(skel->maps.ignore_networks_map), &global_config);
+            if (err) {
+                fprintf(stderr, "Warning: Failed to update network filters: %d\n", err);
+            }
+
+            // Reinitialize filter
+            filter_init(&global_config);
+
+            // Atomically swap logger (close old, use new)
+            // This ensures handle_event() never sees NULL log_fp
+            logger_replace(new_log_fp);
+
+            // Update logger enrichment options
+            logger_set_enrichment(global_config.resolve_usernames,
+                                 global_config.hash_binaries);
+
+            printf("Configuration reloaded:\n");
+            printf("  UID range: %u-%u\n", global_config.min_uid, global_config.max_uid);
+            printf("  Require TTY: %s\n", global_config.require_tty ? "yes" : "no");
+            printf("  Redact sensitive: %s\n", global_config.redact_sensitive ? "yes" : "no");
+            printf("  Resolve usernames: %s\n", global_config.resolve_usernames ? "yes" : "no");
+            printf("  Hash binaries: %s\n", global_config.hash_binaries ? "yes" : "no");
+            printf("  Log file reopened (logrotate support)\n");
+
             reload_config = false;
         }
 

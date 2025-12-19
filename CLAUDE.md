@@ -25,39 +25,61 @@ LinMon is a Linux activity monitoring service similar to Sysmon for Windows. It 
 
 ### Key Files
 
+**eBPF (kernel-space)**:
 - `bpf/common.h` - Shared data structures between kernel and userspace (event types, process_event, file_event, etc.)
-- `bpf/process_monitor.bpf.c` - eBPF program for process execution/exit monitoring
+- `bpf/linmon.bpf.c` - Consolidated eBPF program for all monitoring (process, file, network, privileges)
 - `bpf/vmlinux.h` - Kernel type definitions (should be generated with `bpftool btf dump`)
-- `src/main.c` - Daemon entry point, eBPF loading, and event loop
+
+**Userspace daemon**:
+- `src/main.c` - Daemon entry point, eBPF loading, event loop, and privilege dropping
 - `src/logger.c` - Event logging to JSON files with wall-clock timestamps
-- `src/config.c` - Configuration file parsing
+- `src/config.c` - Configuration file parsing (`/etc/linmon/linmon.conf`)
 - `src/filter.c` - Process name filtering and sensitive data redaction
+- `src/userdb.c` - UID→username resolution with caching
+- `src/filehash.c` - SHA256 hashing of executed binaries
+- `src/procfs.c` - Reading from `/proc` (command-line arguments)
 
 ### Event Flow
 
 ```
-Kernel Event → eBPF Program (UID filter, TTY check)
+Kernel Event → eBPF Program (UID filter, TTY check, rate limiting, CIDR filtering)
                     ↓
                 Ring Buffer
                     ↓
-            Userspace Daemon (process name filter, redaction)
+            Userspace Daemon (process name filter, redaction, username lookup, file hashing)
                     ↓
                 JSON Log
 ```
+
+### Monitoring Capabilities
+
+LinMon monitors multiple event types:
+
+1. **Process Events**: Execution (`EVENT_PROCESS_EXEC`) and termination (`EVENT_PROCESS_EXIT`)
+2. **File Events**: Create, modify, delete operations
+3. **Network Events**: TCP connections (`EVENT_NET_CONNECT_TCP`, `EVENT_NET_ACCEPT_TCP`), UDP traffic
+4. **Privilege Events**: `setuid`, `setgid`, sudo usage
+
+All events can be selectively enabled/disabled via configuration file.
 
 ### Filtering Architecture
 
 LinMon uses a **multi-layer filtering approach** for performance:
 
 1. **Kernel-space (eBPF)**: Fast filtering before events leave the kernel
-   - TTY check: Only processes with controlling TTY
-   - UID range: Configured via BPF map (`min_uid`, `max_uid`)
+   - **TTY check**: Only processes with controlling TTY (configurable via `require_tty`)
+   - **UID range**: Configured via BPF map (`min_uid`, `max_uid`)
+   - **Thread filtering**: Skip thread events, only log main processes (configurable via `ignore_threads`)
+   - **Rate limiting**: Token bucket algorithm (20 burst, 100 events/sec per UID) to prevent flooding
+   - **CIDR filtering**: Skip network events to/from ignored IP ranges (e.g., `127.0.0.0/8`)
    - Exit early to minimize overhead
 
 2. **Userspace**: Rich filtering and processing
-   - Process name whitelist/blacklist
-   - Sensitive data redaction (passwords, tokens, API keys)
-   - JSON formatting and logging
+   - **Process name whitelist/blacklist**: `only_processes` or `ignore_processes`
+   - **Sensitive data redaction**: Detects and redacts passwords, tokens, API keys from command lines
+   - **Username resolution**: Translates UID→username with caching (`userdb.c`)
+   - **File hashing**: SHA256 hash of executed binaries (optional, via `hash_binaries`)
+   - **JSON formatting**: Structured logging with timestamps
 
 ## Build System
 
@@ -86,9 +108,10 @@ sudo make uninstall
 2. **Skeleton generation**: `.bpf.o` → `.skel.h` headers
    - Uses `bpftool gen skeleton`
    - Creates C headers with BPF program loading boilerplate
+   - `bpftool` is auto-detected (Ubuntu: `/usr/lib/linux-tools/*/bpftool`, RHEL: `bpftool` in PATH)
 
 3. **Daemon compilation**: `.c` + `.skel.h` → `linmond` binary
-   - Links against libbpf, libelf, zlib
+   - Links against libbpf, libelf, zlib, pthread, libcrypto (OpenSSL), libcap
 
 ### Generated Files
 
@@ -108,30 +131,63 @@ The `bpf/vmlinux.h` file contains kernel type definitions for CO-RE relocations.
 
 Note: On Ubuntu, the `bpftool` command in `/usr/sbin/bpftool` is just a wrapper script. Use the actual binary from `/usr/lib/linux-tools/*/bpftool`. The Makefile has been updated with the correct path.
 
-### Adding New eBPF Programs
+### Adding New Event Types
 
-1. Create `bpf/newfeature.bpf.c` following the pattern in `process_monitor.bpf.c`
-2. Define event structures in `bpf/common.h`
-3. The Makefile will automatically compile it and generate `src/newfeature.skel.h`
-4. Include the skeleton in `src/main.c` and attach the programs
+LinMon uses a **single consolidated eBPF program** (`bpf/linmon.bpf.c`) instead of separate files. To add new event types:
+
+1. **Define event structure** in `bpf/common.h`:
+   - Add new `EVENT_TYPE_*` enum value
+   - Create event struct (e.g., `struct my_event { __u32 type; __u64 timestamp; ... }`)
+
+2. **Add eBPF handler** in `bpf/linmon.bpf.c`:
+   - Use `SEC("tp/category/name")` for tracepoints or `SEC("kprobe/function")` for kprobes
+   - Apply filtering (UID, TTY, rate limiting) early
+   - Reserve ring buffer space with `bpf_ringbuf_reserve()`
+   - Fill event struct and submit with `bpf_ringbuf_submit()`
+
+3. **Add userspace handler** in `src/main.c`:
+   - Add case in `handle_event()` switch statement
+   - Add logging function in `src/logger.c` to format JSON output
+   - Add configuration option in `src/config.c` if needed
+
+4. **Rebuild**: The Makefile automatically compiles and generates skeleton
 
 ### eBPF Program Structure
 
-Each `.bpf.c` file should:
-- Include `vmlinux.h`, `bpf/bpf_helpers.h`, `bpf/bpf_core_read.h`
-- Define a GPL license: `char LICENSE[] SEC("license") = "GPL";`
-- Use `SEC("tp/category/name")` or `SEC("kprobe/function")` for program sections
-- Use BPF maps for communication (ring buffers, hash maps)
-- Use `BPF_CORE_READ()` macros for portable kernel struct access
+The consolidated `bpf/linmon.bpf.c` file contains:
+- GPL license declaration: `char LICENSE[] SEC("license") = "GPL";`
+- **BPF maps**:
+  - `config_map` (ARRAY): Configuration from userspace (`min_uid`, `max_uid`, `capture_cmdline`, etc.)
+  - `events` (RINGBUF): Ring buffer for sending events to userspace (256KB)
+  - `rate_limit_map` (LRU_HASH): Per-UID token bucket state for rate limiting
+  - `ignore_networks_map` (HASH): CIDR blocks to ignore for network events
+- **Helper functions**: `should_monitor_uid()`, `is_interactive_session()`, `should_rate_limit()`, `is_ignored_network()`
+- **eBPF programs**: Multiple `SEC("tp/...")` and `SEC("kprobe/...")` sections for different events
+- All kernel struct access uses `BPF_CORE_READ()` macros for CO-RE portability
+
+### BPF Map Communication
+
+LinMon uses BPF maps for bidirectional communication:
+
+1. **Userspace → Kernel** (`config_map`):
+   - Daemon populates config at startup via `bpf_map_update_elem()`
+   - eBPF programs read config to apply filters
+   - Can be updated at runtime (e.g., on SIGHUP config reload)
+
+2. **Kernel → Userspace** (`events` ring buffer):
+   - eBPF programs submit events with `bpf_ringbuf_reserve()` / `bpf_ringbuf_submit()`
+   - Userspace polls with `ring_buffer__poll()`
+   - Callback function `handle_event()` processes each event
 
 ### Filtering Implementation
 
-**eBPF Kernel-Space Filtering** (`bpf/process_monitor.bpf.c`):
+**eBPF Kernel-Space Filtering** (`bpf/linmon.bpf.c`):
 
-1. **TTY Check** - `is_interactive_session()`: Only processes with controlling TTY
-2. **UID Range** - `should_monitor_uid()`: Reads `min_uid`/`max_uid` from BPF `config_map`
-
-The `config_map` is populated by userspace at startup and can be updated at runtime.
+1. **UID Range** - `should_monitor_uid()`: Reads `min_uid`/`max_uid` from `config_map`
+2. **TTY Check** - `is_interactive_session()`: Only processes with controlling TTY (if `require_tty` enabled)
+3. **Thread Filtering**: Skip thread events (pid != tgid) if `ignore_threads` enabled
+4. **Rate Limiting** - `should_rate_limit()`: Token bucket (20 burst, 100 events/sec per UID)
+5. **CIDR Filtering** - `is_ignored_network()`: Skip network events to/from ignored IP ranges
 
 **Userspace Filtering** (`src/filter.c`):
 
@@ -140,13 +196,13 @@ The `config_map` is populated by userspace at startup and can be updated at runt
    - Blacklist: Skip processes in `ignore_processes` list
 
 2. **Sensitive Data Redaction** - `filter_redact_cmdline()`:
-   - Detects patterns: `password=`, `token=`, `api_key=`, `-p`, etc.
+   - Detects patterns: `password=`, `token=`, `api_key=`, `-p`, `--password`, etc.
    - Replaces values with `****`
    - Example: `mysql -pSecretPass` → `mysql -p****`
 
 When adding new event types:
-- Add eBPF filtering for performance-critical checks (UID, GID)
-- Add userspace filtering for complex logic (regex, string matching)
+- Add eBPF filtering for performance-critical checks (UID, rate limiting)
+- Add userspace filtering for complex logic (regex, string matching, enrichment)
 
 ### Testing eBPF Programs
 
@@ -170,14 +226,27 @@ tail -f /var/log/linmon/events.json
 
 **Build fails with "vmlinux.h not found"**: Generate it using bpftool (see above)
 
+**Build fails with "bpftool not found"**:
+- Ubuntu: `sudo apt-get install linux-tools-generic`
+- RHEL/Rocky: `sudo dnf install bpftool`
+
 **"Failed to load BPF object"**: Check kernel version (needs >= 5.8) and BTF support:
 ```bash
 ls /sys/kernel/btf/vmlinux
 ```
 
-**"Operation not permitted"**: Run with sudo or install as systemd service which has necessary capabilities
+**"Operation not permitted" on BPF load**: Run with sudo or install as systemd service which has necessary capabilities (`CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`)
 
-**No events appearing**: Check `is_interactive_session()` logic - it may be filtering too aggressively
+**No events appearing**:
+- Check UID filtering: Default `min_uid=1000` may be excluding your user
+- Check TTY requirement: `require_tty=true` excludes GUI apps and background processes
+- Check process filters: `ignore_processes` or `only_processes` may be too restrictive
+- Check that specific monitoring is enabled: `monitor_processes=true`, `monitor_tcp=true`, etc.
+
+**RHEL 9 compatibility issues**:
+- BPF verifier may reject complex loops - use manual loop unrolling
+- Syscall tracepoints may be blocked by security policy - use kprobes as fallback
+- File/privilege monitoring may need to be disabled on locked-down systems
 
 ## Code Style
 
@@ -195,35 +264,110 @@ ls /sys/kernel/btf/vmlinux
 
 ## Security Considerations
 
-- The daemon requires `CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, and `CAP_SYS_RESOURCE`
-- eBPF programs run in kernel space and must pass the verifier
-- Event data from kernel should be treated carefully (use `bpf_probe_read_str` for strings)
-- JSON logging escapes special characters to prevent log injection
+LinMon implements defense-in-depth security. See `SECURITY.md` for full details.
 
-## Future Extensions
+### Privilege Dropping Sequence
 
-Areas for expansion:
-- File monitoring eBPF program (open, read, write, unlink)
-- Network connection tracking (TCP connect/accept)
-- User login detection (PAM integration or utmp monitoring)
-- Configuration file support (`/etc/linmon/linmon.conf`)
-- Log rotation and compression
-- Syslog integration
-- Event filtering rules
+**CRITICAL ORDER** - must be performed in this exact sequence:
+
+1. **Load BPF programs** (requires `CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`)
+2. **Open log file** (requires write access to `/var/log/linmon/`)
+3. **Drop UID/GID** to `nobody:nogroup` (UID/GID 65534) - requires `CAP_SETUID`/`CAP_SETGID`
+4. **Drop ALL capabilities** - daemon runs with zero capabilities after this point
+5. **Verify cannot regain root** - `setuid(0)` must fail
+
+After privilege drop, daemon **cannot**:
+- Load new BPF programs
+- Modify system configuration
+- Access files outside `/var/log/linmon/`
+- Regain root privileges
+
+### Configuration Security
+
+- **Log path validation**: Must be absolute, no `..` (path traversal prevention)
+- **Config file permissions**: Aborts if world-writable, warns if not owned by root
+- **Integer overflow protection**: `strtoul()` with bounds checking for UID parsing
+- **SIGHUP config reload**: Reloads config safely without restarting daemon
+
+### eBPF Security
+
+- eBPF programs run in kernel space and must pass the BPF verifier
+- Use `bpf_probe_read_str()` and `bpf_probe_read_kernel()` for all kernel memory access
+- Ring buffer events are read-only in userspace
+- Rate limiting prevents flooding from malicious processes
+
+## Runtime Configuration
+
+LinMon supports **SIGHUP signal** for configuration reload without restarting:
+
+```bash
+# Edit config
+sudo vi /etc/linmon/linmon.conf
+
+# Reload config (if running as systemd service)
+sudo systemctl reload linmond
+
+# Or send SIGHUP directly
+sudo pkill -HUP linmond
+```
+
+On SIGHUP, LinMon will:
+- Reopen log file (supports log rotation)
+- Reload configuration from `/etc/linmon/linmon.conf`
+- Update BPF map config (`min_uid`, `max_uid`, filters, etc.)
+- Continue monitoring without dropping events
+
+## Cross-Platform Compatibility
+
+LinMon has special handling for different Linux distributions:
+
+### Group Name Detection
+
+Different distros use different group names for the unprivileged user:
+- **Debian/Ubuntu**: `nobody:nogroup`
+- **RHEL/Rocky/CentOS/AlmaLinux**: `nobody:nobody`
+
+The Makefile and `install.sh` auto-detect the correct group using `getent group nogroup`.
+
+### RHEL 9 Specific Adaptations
+
+RHEL 9 has stricter eBPF security policies:
+
+1. **BPF Verifier**: Older verifier (kernel 5.14) doesn't support bounded loops well
+   - **Solution**: Manual loop unrolling for CIDR filtering (reduced from 32 to 16 blocks)
+
+2. **Syscall Tracepoint Blocking**: Security policy prevents attaching to some syscall tracepoints
+   - **Solution**: Runtime fallback from tracepoints to kprobes (handled automatically in eBPF)
+   - File and privilege monitoring may be disabled on locked-down systems
+
+3. **BTF Support**: RHEL 9 has BTF enabled, but with older format
+   - **Solution**: CO-RE handles this automatically
 
 ## Platform Support
 
-### Ubuntu (22.04+)
-- Install dependencies: `apt-get install clang llvm libelf-dev libbpf-dev`
-- Kernel must have BTF enabled (default in Ubuntu 20.04+)
+### Ubuntu 24.04 (Recommended)
+- Kernel 6.8+ with full eBPF support
+- Install dependencies: `apt-get install clang llvm libelf-dev libbpf-dev linux-tools-generic libssl-dev libcap-dev`
+- BTF enabled by default
+- All features fully supported
 
-### RHEL/Rocky/Alma (8+)
-- Install dependencies: `dnf install clang llvm elfutils-libelf-devel libbpf-devel`
-- May need to enable kernel-devel for headers
-- RHEL 8 uses older kernel (4.18) with backported eBPF features
+### RHEL 9 / Rocky Linux 9 / AlmaLinux 9
+- Kernel 5.14+ with backported eBPF features
+- Install dependencies: `dnf install clang llvm elfutils-libelf-devel libbpf-devel bpftool openssl-devel libcap-devel`
+- May need to enable CRB (CodeReady Builder) repo
+- File/privilege monitoring may be limited due to security policies
+
+### RHEL 10 / Rocky Linux 10
+- Expected kernel 6.x+ with modern eBPF
+- Same dependencies as RHEL 9
+- Full feature support expected
 
 ### Kernel Requirements
-- Linux >= 5.8 for full CO-RE support
-- BTF (BPF Type Format) enabled in kernel config
-- CONFIG_DEBUG_INFO_BTF=y
-- CONFIG_BPF=y, CONFIG_BPF_SYSCALL=y
+- **Minimum**: Linux 5.8 for CO-RE support
+- **Recommended**: Linux 5.14+ (RHEL 9) or 6.8+ (Ubuntu 24.04)
+- **Required kernel config**:
+  - `CONFIG_DEBUG_INFO_BTF=y` (BTF support)
+  - `CONFIG_BPF=y`, `CONFIG_BPF_SYSCALL=y` (BPF enabled)
+  - `CONFIG_BPF_JIT=y` (JIT compilation for performance)
+
+Check BTF support: `ls /sys/kernel/btf/vmlinux` (should exist)

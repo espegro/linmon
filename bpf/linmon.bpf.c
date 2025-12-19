@@ -92,7 +92,7 @@ static __always_inline bool should_rate_limit(__u32 uid)
 
     // Consume one token
     state->tokens--;
-    bpf_map_update_elem(&rate_limit_map, &uid, state, BPF_EXIST);
+    bpf_map_update_elem(&rate_limit_map, &uid, state, BPF_ANY);
     return false;
 }
 

@@ -13,6 +13,9 @@ int logger_init(const char *log_file);
 // Set enrichment options
 void logger_set_enrichment(bool resolve_usernames, bool hash_binaries);
 
+// Replace logger file pointer atomically (for config reload)
+void logger_replace(FILE *new_fp);
+
 // Log a process event
 int logger_log_process_event(const struct process_event *event);
 

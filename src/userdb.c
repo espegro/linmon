@@ -33,7 +33,13 @@ void userdb_cleanup(void)
 
 static int cache_hash(uid_t uid)
 {
-    return uid % CACHE_SIZE;
+    // Better hash function to reduce collisions
+    // Uses multiplication and bit mixing for better distribution
+    unsigned int h = uid;
+    h = ((h >> 16) ^ h) * 0x45d9f3b;
+    h = ((h >> 16) ^ h) * 0x45d9f3b;
+    h = (h >> 16) ^ h;
+    return h % CACHE_SIZE;
 }
 
 void userdb_resolve(uid_t uid, char *buf, size_t buf_size)

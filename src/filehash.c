@@ -63,7 +63,7 @@ static int find_lru_entry(void)
     return lru_idx;
 }
 
-static bool compute_sha256(const char *path, char *hash_out)
+static bool compute_sha256(const char *path, char *hash_out, struct stat *st_out)
 {
     unsigned char hash[SHA256_DIGEST_LENGTH];
     unsigned char buffer[READ_BUFFER_SIZE];
@@ -71,10 +71,22 @@ static bool compute_sha256(const char *path, char *hash_out)
     int fd;
     ssize_t bytes;
     unsigned int hash_len;
+    struct stat st;
 
+    // Open file first to avoid TOCTOU race
     fd = open(path, O_RDONLY);
     if (fd < 0)
         return false;
+
+    // Get file metadata from already-opened fd (no TOCTOU)
+    if (fstat(fd, &st) < 0) {
+        close(fd);
+        return false;
+    }
+
+    // Return stat info for cache validation
+    if (st_out)
+        *st_out = st;
 
     mdctx = EVP_MD_CTX_new();
     if (!mdctx) {
@@ -110,11 +122,16 @@ static bool compute_sha256(const char *path, char *hash_out)
 
     EVP_MD_CTX_free(mdctx);
 
-    // Convert to hex string
-    for (unsigned int i = 0; i < hash_len; i++) {
-        sprintf(hash_out + (i * 2), "%02x", hash[i]);
+    // Convert to hex string (hash_len should be 32 for SHA256)
+    // Ensure we don't overflow hash_out buffer
+    if (hash_len > 32) {
+        return false;  // Unexpected hash length
     }
-    hash_out[64] = '\0';
+
+    for (unsigned int i = 0; i < hash_len && (i * 2 + 2) < SHA256_HEX_LEN; i++) {
+        snprintf(hash_out + (i * 2), 3, "%02x", hash[i]);
+    }
+    hash_out[SHA256_HEX_LEN - 1] = '\0';
 
     return true;
 }
@@ -128,7 +145,8 @@ bool filehash_calculate(const char *path, char *hash_out, size_t hash_size)
     if (!path || !hash_out || hash_size < SHA256_HEX_LEN)
         return false;
 
-    // Get file metadata
+    // Quick stat to get dev/ino for cache lookup (not used for security)
+    // The real stat happens inside compute_sha256() after open()
     if (stat(path, &st) < 0)
         return false;
 
@@ -154,22 +172,24 @@ bool filehash_calculate(const char *path, char *hash_out, size_t hash_size)
         return true;
 
     // Cache miss - compute hash
-    if (!compute_sha256(path, hash_out))
+    // compute_sha256 will do fstat() after open() to avoid TOCTOU
+    struct stat actual_st;
+    if (!compute_sha256(path, hash_out, &actual_st))
         return false;
 
-    // Update cache
+    // Update cache with actual file stats from fstat()
     pthread_mutex_lock(&cache_mutex);
 
     // If slot is occupied by different file, find LRU entry
     if (cache[idx].valid &&
-        (cache[idx].dev != st.st_dev || cache[idx].ino != st.st_ino)) {
+        (cache[idx].dev != actual_st.st_dev || cache[idx].ino != actual_st.st_ino)) {
         idx = find_lru_entry();
     }
 
-    cache[idx].dev = st.st_dev;
-    cache[idx].ino = st.st_ino;
-    cache[idx].mtime = st.st_mtime;
-    cache[idx].size = st.st_size;
+    cache[idx].dev = actual_st.st_dev;
+    cache[idx].ino = actual_st.st_ino;
+    cache[idx].mtime = actual_st.st_mtime;
+    cache[idx].size = actual_st.st_size;
     cache[idx].valid = true;
     cache[idx].access_count = global_access_counter;
     snprintf(cache[idx].hash, SHA256_HEX_LEN, "%s", hash_out);

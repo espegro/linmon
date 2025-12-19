@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 
 #include "logger.h"
 #include "userdb.h"
@@ -17,6 +18,8 @@ static FILE *log_fp = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool enable_resolve_usernames = false;
 static bool enable_hash_binaries = false;
+static unsigned long write_error_count = 0;
+static bool log_write_errors = true;  // Only log first few errors to avoid spam
 
 int logger_init(const char *log_file)
 {
@@ -35,6 +38,47 @@ void logger_set_enrichment(bool resolve_usernames, bool hash_binaries)
 {
     enable_resolve_usernames = resolve_usernames;
     enable_hash_binaries = hash_binaries;
+}
+
+void logger_replace(FILE *new_fp)
+{
+    FILE *old_fp;
+
+    if (!new_fp)
+        return;
+
+    // Atomically swap file pointer while holding mutex
+    // This ensures no logger_log_*() call sees NULL log_fp
+    pthread_mutex_lock(&log_mutex);
+    old_fp = log_fp;
+    log_fp = new_fp;
+    // Reset error counter on log file rotation
+    write_error_count = 0;
+    log_write_errors = true;
+    pthread_mutex_unlock(&log_mutex);
+
+    // Close old file outside mutex to avoid blocking logging
+    if (old_fp)
+        fclose(old_fp);
+}
+
+// Check fprintf result and report errors (with rate limiting)
+static inline bool check_fprintf_result(int ret)
+{
+    if (ret < 0) {
+        write_error_count++;
+        // Only log first 10 errors to avoid stderr spam
+        if (log_write_errors && write_error_count <= 10) {
+            fprintf(stderr, "Warning: Failed to write to log file (error count: %lu)\n",
+                    write_error_count);
+            if (write_error_count == 10) {
+                fprintf(stderr, "Warning: Suppressing further log write errors\n");
+                log_write_errors = false;
+            }
+        }
+        return false;
+    }
+    return true;
 }
 
 // Escape special characters for JSON strings
@@ -84,8 +128,14 @@ static void json_escape(const char *src, char *dst, size_t dst_size)
         default:
             // Control characters - escape as \uXXXX
             if (c < 0x20) {
-                snprintf(dst + j, dst_size - j, "\\u%04x", c);
-                j += 6;
+                // Ensure we have room for full escape sequence
+                if (j + 6 >= dst_size)
+                    break;
+                int written = snprintf(dst + j, dst_size - j, "\\u%04x", c);
+                if (written > 0 && written < (int)(dst_size - j))
+                    j += written;
+                else
+                    break;  // snprintf failed or would truncate
             } else {
                 dst[j++] = c;
             }
@@ -190,9 +240,12 @@ int logger_log_process_event(const struct process_event *event)
         fprintf(log_fp, ",\"exit_code\":%d", (int)event->exit_code);
     }
 
-    fprintf(log_fp, "}\n");
+    int ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
+
+    if (!check_fprintf_result(ret))
+        return -EIO;
 
     return 0;
 }
@@ -246,10 +299,13 @@ int logger_log_file_event(const struct file_event *event)
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
     }
 
-    fprintf(log_fp, ",\"comm\":\"%s\",\"filename\":\"%s\",\"flags\":%u}\n",
+    int ret = fprintf(log_fp, ",\"comm\":\"%s\",\"filename\":\"%s\",\"flags\":%u}\n",
             comm_escaped, filename_escaped, event->flags);
 
     pthread_mutex_unlock(&log_mutex);
+
+    if (!check_fprintf_result(ret))
+        return -EIO;
 
     return 0;
 }
@@ -318,12 +374,15 @@ int logger_log_network_event(const struct network_event *event)
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
     }
 
-    fprintf(log_fp, ",\"comm\":\"%s\",\"saddr\":\"%s\","
+    int ret = fprintf(log_fp, ",\"comm\":\"%s\",\"saddr\":\"%s\","
             "\"daddr\":\"%s\",\"sport\":%u,\"dport\":%u}\n",
             comm_escaped, saddr_str, daddr_str,
             event->sport, event->dport);
 
     pthread_mutex_unlock(&log_mutex);
+
+    if (!check_fprintf_result(ret))
+        return -EIO;
 
     return 0;
 }
@@ -395,9 +454,12 @@ int logger_log_privilege_event(const struct privilege_event *event)
         fprintf(log_fp, ",\"target\":\"%s\"", target_escaped);
     }
 
-    fprintf(log_fp, "}\n");
+    int ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
+
+    if (!check_fprintf_result(ret))
+        return -EIO;
 
     return 0;
 }
