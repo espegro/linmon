@@ -670,9 +670,16 @@ int logger_log_security_event(const struct security_event *event)
     } else if (event->type == EVENT_SECURITY_BPF) {
         fprintf(log_fp, ",\"bpf_cmd\":%u", event->extra);
     } else if (event->type == EVENT_SECURITY_CRED_READ) {
-        // extra: 1=shadow, 2=gshadow
-        const char *file_type = event->extra == 1 ? "shadow" :
-                                event->extra == 2 ? "gshadow" : "unknown";
+        // extra: 1=shadow, 2=gshadow, 3=sudoers, 4=ssh_config, 5=pam_config
+        const char *file_type;
+        switch (event->extra) {
+        case 1: file_type = "shadow"; break;
+        case 2: file_type = "gshadow"; break;
+        case 3: file_type = "sudoers"; break;
+        case 4: file_type = "ssh_config"; break;
+        case 5: file_type = "pam_config"; break;
+        default: file_type = "unknown"; break;
+        }
         fprintf(log_fp, ",\"cred_file\":\"%s\",\"open_flags\":%u", file_type, event->flags);
         if (event->filename[0]) {
             json_escape(event->filename, filename_escaped, sizeof(filename_escaped));

@@ -232,12 +232,16 @@ hash_binaries = true
 # These detections have very low false positive rates and catch critical
 # attack techniques. ENABLED BY DEFAULT - recommended for all systems.
 
-# Monitor credential file reads - T1003.008 Credential Dumping detection
-# Logs: security_cred_read events
-# Detects: Reads of /etc/shadow, /etc/gshadow by non-whitelisted processes
-# Use case: Detect password hash theft for offline cracking
+# Monitor credential/auth file reads - T1003.008 Credential Dumping detection
+# Logs: security_cred_read events with "cred_file" field indicating type
+# Detects reads of:
+#   - /etc/shadow, /etc/gshadow (password hashes)
+#   - /etc/sudoers, /etc/sudoers.d/* (sudo configuration)
+#   - /etc/ssh/* (SSH configuration, authorized_keys)
+#   - /etc/pam.d/* (PAM authentication configuration)
+# Use case: Detect credential theft, auth config reconnaissance, privilege escalation prep
 # Smart filtering: Whitelists legitimate processes (login, sshd, su, sudo,
-#                  passwd, useradd, sssd, nscd, polkitd, gdm, etc.)
+#                  passwd, useradd, sssd, nscd, polkitd, gdm, cron, etc.)
 # Only logs SUSPICIOUS reads - legitimate auth processes are ignored
 # Default: true (RECOMMENDED - very low noise, catches credential theft)
 monitor_cred_read = true

@@ -1612,24 +1612,58 @@ static __always_inline int is_legit_cred_reader(const char *comm)
     return 0;  // Not whitelisted - log it
 }
 
-// Check if path is a sensitive credential file
-// Returns file type: 1=shadow, 2=gshadow, 0=not sensitive
+// Check if path is a sensitive credential/auth file
+// Returns file type:
+//   0 = not sensitive
+//   1 = /etc/shadow
+//   2 = /etc/gshadow
+//   3 = /etc/sudoers or /etc/sudoers.d/*
+//   4 = /etc/ssh/* (SSH config files)
+//   5 = /etc/pam.d/* (PAM config files)
 static __always_inline int get_cred_file_type(const char *path)
 {
+    // All sensitive files start with /etc/
+    if (path[0] != '/' || path[1] != 'e' || path[2] != 't' ||
+        path[3] != 'c' || path[4] != '/')
+        return 0;
+
+    // After /etc/ (index 5)
+    char c5 = path[5];
+
     // Check for /etc/shadow
-    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && 
-        path[3] == 'c' && path[4] == '/' && path[5] == 's' &&
-        path[6] == 'h' && path[7] == 'a' && path[8] == 'd' &&
+    if (c5 == 's' && path[6] == 'h' && path[7] == 'a' && path[8] == 'd' &&
         path[9] == 'o' && path[10] == 'w' && path[11] == '\0') {
         return 1;  // /etc/shadow
     }
+
     // Check for /etc/gshadow
-    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && 
-        path[3] == 'c' && path[4] == '/' && path[5] == 'g' &&
-        path[6] == 's' && path[7] == 'h' && path[8] == 'a' &&
+    if (c5 == 'g' && path[6] == 's' && path[7] == 'h' && path[8] == 'a' &&
         path[9] == 'd' && path[10] == 'o' && path[11] == 'w' && path[12] == '\0') {
         return 2;  // /etc/gshadow
     }
+
+    // Check for /etc/sudoers (exact) or /etc/sudoers.d/* (prefix)
+    if (c5 == 's' && path[6] == 'u' && path[7] == 'd' && path[8] == 'o' &&
+        path[9] == 'e' && path[10] == 'r' && path[11] == 's') {
+        // /etc/sudoers (exact match)
+        if (path[12] == '\0')
+            return 3;
+        // /etc/sudoers.d/* (directory prefix)
+        if (path[12] == '.' && path[13] == 'd' && path[14] == '/')
+            return 3;
+    }
+
+    // Check for /etc/ssh/* (prefix match)
+    if (c5 == 's' && path[6] == 's' && path[7] == 'h' && path[8] == '/') {
+        return 4;  // /etc/ssh/*
+    }
+
+    // Check for /etc/pam.d/* (prefix match)
+    if (c5 == 'p' && path[6] == 'a' && path[7] == 'm' && path[8] == '.' &&
+        path[9] == 'd' && path[10] == '/') {
+        return 5;  // /etc/pam.d/*
+    }
+
     return 0;  // Not a sensitive file
 }
 
