@@ -150,6 +150,7 @@ bpftool version
 - ✅ Full eBPF support (kernel 5.14+)
 - ⚠️ May need CRB repo for libbpf-devel
 - ✅ BTF enabled by default
+- ⚠️ SELinux policy required (see below)
 
 **RHEL 10** (when released):
 - ✅ Expected to have kernel 6.x+
@@ -170,6 +171,25 @@ sudo ./build/linmond
 sudo make install
 sudo systemctl enable linmond
 sudo systemctl start linmond
+```
+
+### SELinux (RHEL 9 / Rocky Linux / AlmaLinux)
+
+On systems with SELinux enforcing, install the SELinux policy module:
+
+```bash
+cd selinux
+sudo ./install-selinux.sh
+```
+
+This allows linmond to use eBPF for system monitoring. If you see SELinux denials:
+```bash
+# Check for denials
+ausearch -m avc -ts recent | grep linmond
+
+# Generate additional policy if needed
+ausearch -m avc -ts recent | audit2allow -M linmond_extra
+sudo semodule -i linmond_extra.pp
 ```
 
 ## Configuration

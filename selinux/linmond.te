@@ -1,0 +1,27 @@
+# LinMon SELinux Policy Module
+# Install: semodule -i linmond.pp
+#
+# This policy allows the linmond daemon to use eBPF for system monitoring.
+
+policy_module(linmond, 1.0.0)
+
+require {
+    type unconfined_service_t;
+    type init_t;
+    type kernel_t;
+    type sysctl_kernel_t;
+    class bpf { map_create map_read map_write prog_load prog_run };
+    class perf_event { open read write };
+    class capability { sys_admin net_admin sys_resource };
+    class capability2 { bpf perfmon };
+}
+
+# Allow unconfined services (systemd-started daemons) to use BPF
+allow unconfined_service_t self:bpf { map_create map_read map_write prog_load prog_run };
+
+# Allow BPF perf events for ring buffer
+allow unconfined_service_t self:perf_event { open read write };
+
+# Allow capabilities needed for BPF loading
+allow unconfined_service_t self:capability { sys_admin net_admin sys_resource };
+allow unconfined_service_t self:capability2 { bpf perfmon };
