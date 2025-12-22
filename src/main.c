@@ -237,6 +237,32 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         break;
     }
 
+    // Security monitoring events (MITRE ATT&CK detection)
+    case EVENT_SECURITY_PTRACE:
+    case EVENT_SECURITY_MODULE:
+    case EVENT_SECURITY_MEMFD: {
+        // Check respective config flags
+        if (type == EVENT_SECURITY_PTRACE && !global_config.monitor_ptrace)
+            return 0;
+        if (type == EVENT_SECURITY_MODULE && !global_config.monitor_modules)
+            return 0;
+        if (type == EVENT_SECURITY_MEMFD && !global_config.monitor_memfd)
+            return 0;
+
+        if (data_sz < sizeof(struct security_event)) {
+            fprintf(stderr, "Invalid security event size: %zu\n", data_sz);
+            return 0;
+        }
+        struct security_event *e = data;
+
+        // Apply process filtering
+        if (!filter_should_log_process(e->comm))
+            return 0;
+
+        logger_log_security_event(e);
+        break;
+    }
+
     default:
         fprintf(stderr, "Unknown event type: %u\n", type);
         break;
@@ -539,6 +565,34 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         attached_count++;
     }
 
+    // Security monitoring - ptrace (T1055 Process Injection)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_ptrace_tp,
+        skel->progs.handle_ptrace_kp,
+        "Ptrace monitoring (T1055)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - finit_module (T1547.006 Kernel Modules)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_finit_module_tp,
+        skel->progs.handle_finit_module_kp,
+        "Module loading (T1547.006)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - init_module (T1547.006 Kernel Modules - legacy)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_init_module_tp,
+        skel->progs.handle_init_module_kp,
+        "Legacy module loading (T1547.006)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - memfd_create (T1620 Fileless Malware)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_memfd_create_tp,
+        skel->progs.handle_memfd_create_kp,
+        "Memfd monitoring (T1620)");
+    if (!link) failed_count++; else attached_count++;
+
     printf("\nAttachment summary: %d programs attached", attached_count);
     if (failed_count > 0) {
         printf(" (%d failed - some features may be unavailable)\n", failed_count);
@@ -579,7 +633,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.5\n");
+            printf("LinMon version 1.0.6\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -640,6 +694,10 @@ int main(int argc, char **argv)
     printf("  Redact sensitive: %s\n", global_config.redact_sensitive ? "yes" : "no");
     printf("  Resolve usernames: %s\n", global_config.resolve_usernames ? "yes" : "no");
     printf("  Hash binaries: %s\n", global_config.hash_binaries ? "yes" : "no");
+    printf("  Security monitoring:\n");
+    printf("    ptrace (T1055): %s\n", global_config.monitor_ptrace ? "enabled" : "disabled");
+    printf("    modules (T1547.006): %s\n", global_config.monitor_modules ? "enabled" : "disabled");
+    printf("    memfd (T1620): %s\n", global_config.monitor_memfd ? "enabled" : "disabled");
 
     // Initialize filter
     filter_init(&global_config);

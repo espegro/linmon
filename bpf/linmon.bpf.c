@@ -973,3 +973,217 @@ int handle_setgid_kp(struct pt_regs *ctx)
     __u32 new_gid = (__u32)PT_REGS_PARM1(ctx);
     return handle_setgid_common(new_gid);
 }
+
+// ============================================================================
+// SECURITY MONITORING - Process Injection (MITRE ATT&CK T1055)
+// ============================================================================
+
+// ptrace request values we care about for security monitoring
+// PTRACE_ATTACH = 16 - attach to process for debugging
+// PTRACE_SEIZE = 16902 - modern attach without stopping
+// PTRACE_POKETEXT = 4 - write to text segment (code injection)
+// PTRACE_POKEDATA = 5 - write to data segment
+#define PTRACE_POKETEXT 4
+#define PTRACE_POKEDATA 5
+#define PTRACE_ATTACH 16
+#define PTRACE_SEIZE 16902
+
+static __always_inline int handle_ptrace_common(long request, __u32 target_pid)
+{
+    // Only log dangerous requests that could indicate process injection
+    if (request != PTRACE_ATTACH && request != PTRACE_SEIZE &&
+        request != PTRACE_POKETEXT && request != PTRACE_POKEDATA)
+        return 0;
+
+    __u32 uid = bpf_get_current_uid_gid();
+
+    if (!should_monitor_uid(uid))
+        return 0;
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_PTRACE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = target_pid;
+    event->flags = (__u32)request;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_ptrace")
+int handle_ptrace_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    long request = (long)ctx->args[0];
+    __u32 target_pid = (__u32)ctx->args[1];
+    return handle_ptrace_common(request, target_pid);
+}
+
+SEC("kprobe/__x64_sys_ptrace")
+int handle_ptrace_kp(struct pt_regs *ctx)
+{
+    long request = (long)PT_REGS_PARM1(ctx);
+    __u32 target_pid = (__u32)PT_REGS_PARM2(ctx);
+    return handle_ptrace_common(request, target_pid);
+}
+
+// ============================================================================
+// SECURITY MONITORING - Kernel Module Loading (MITRE ATT&CK T1547.006)
+// ============================================================================
+
+// finit_module is the modern syscall (loads module from file descriptor)
+SEC("tp/syscalls/sys_enter_finit_module")
+int handle_finit_module_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    // Module loading is always security-relevant (only root can do it anyway)
+    // Don't apply UID filtering - we want to know about all module loads
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_MODULE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = (__u32)ctx->args[2];  // Module flags
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';  // Can't easily get module name from fd
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_finit_module")
+int handle_finit_module_kp(struct pt_regs *ctx)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_MODULE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = (__u32)PT_REGS_PARM3(ctx);
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+// init_module is the legacy syscall (loads module from memory buffer)
+SEC("tp/syscalls/sys_enter_init_module")
+int handle_init_module_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_MODULE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = 0;  // Legacy syscall doesn't have flags
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_init_module")
+int handle_init_module_kp(struct pt_regs *ctx)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_MODULE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = 0;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+// ============================================================================
+// SECURITY MONITORING - Fileless Malware Detection (MITRE ATT&CK T1620)
+// ============================================================================
+
+static __always_inline int handle_memfd_common(const char *name, unsigned int flags)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    if (!should_monitor_uid(uid))
+        return 0;
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_MEMFD;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = flags;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+
+    // Read memfd name from userspace
+    if (name) {
+        bpf_probe_read_user_str(&event->filename, sizeof(event->filename), name);
+    } else {
+        event->filename[0] = '\0';
+    }
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_memfd_create")
+int handle_memfd_create_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    const char *name = (const char *)ctx->args[0];
+    unsigned int flags = (unsigned int)ctx->args[1];
+    return handle_memfd_common(name, flags);
+}
+
+SEC("kprobe/__x64_sys_memfd_create")
+int handle_memfd_create_kp(struct pt_regs *ctx)
+{
+    const char *name = (const char *)PT_REGS_PARM1(ctx);
+    unsigned int flags = (unsigned int)PT_REGS_PARM2(ctx);
+    return handle_memfd_common(name, flags);
+}

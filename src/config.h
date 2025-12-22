@@ -41,6 +41,11 @@ struct linmon_config {
 
     // File path filtering
     char *ignore_file_paths;  // Comma-separated file path prefixes to ignore
+
+    // Security monitoring (MITRE ATT&CK detection)
+    bool monitor_ptrace;      // T1055 - Process injection via ptrace
+    bool monitor_modules;     // T1547.006 - Kernel module loading
+    bool monitor_memfd;       // T1620 - Fileless malware via memfd_create
 };
 
 // Load configuration from file

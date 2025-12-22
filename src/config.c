@@ -33,6 +33,10 @@ static void set_defaults(struct linmon_config *config)
     config->only_processes = NULL;
     config->ignore_networks = NULL;
     config->ignore_file_paths = NULL;
+    // Security monitoring defaults (opt-in, disabled by default)
+    config->monitor_ptrace = false;
+    config->monitor_modules = false;
+    config->monitor_memfd = false;
 }
 
 int load_config(struct linmon_config *config, const char *config_file)
@@ -183,6 +187,13 @@ int load_config(struct linmon_config *config, const char *config_file)
                     return -ENOMEM;
                 }
             }
+        // Security monitoring (MITRE ATT&CK detection)
+        } else if (strcmp(key, "monitor_ptrace") == 0) {
+            config->monitor_ptrace = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_modules") == 0) {
+            config->monitor_modules = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_memfd") == 0) {
+            config->monitor_memfd = (strcmp(value, "true") == 0);
         }
     }
 

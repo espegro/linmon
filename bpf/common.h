@@ -63,6 +63,10 @@ enum event_type {
     EVENT_PRIV_SUDO = 11,
     EVENT_NET_SEND_UDP = 12,
     EVENT_NET_RECV_UDP = 13,
+    // Security monitoring events (MITRE ATT&CK detection)
+    EVENT_SECURITY_PTRACE = 14,   // T1055 - Process Injection
+    EVENT_SECURITY_MODULE = 15,   // T1547.006 - Kernel Module Loading
+    EVENT_SECURITY_MEMFD = 16,    // T1620 - Fileless Malware
 };
 
 // Process information stored in map
@@ -124,6 +128,18 @@ struct privilege_event {
     __u32 new_gid;
     char comm[TASK_COMM_LEN];
     char target_comm[TASK_COMM_LEN]; // For sudo: the command being run
+};
+
+// Security monitoring event (MITRE ATT&CK detection)
+struct security_event {
+    __u32 type;
+    __u64 timestamp;
+    __u32 pid;
+    __u32 uid;
+    __u32 target_pid;                 // For ptrace: target process PID
+    __u32 flags;                      // ptrace request, module flags, memfd flags
+    char comm[TASK_COMM_LEN];
+    char filename[MAX_FILENAME_LEN];  // Module name or memfd name
 };
 
 #endif /* __LINMON_COMMON_H */

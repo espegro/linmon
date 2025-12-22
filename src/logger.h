@@ -28,6 +28,9 @@ int logger_log_network_event(const struct network_event *event);
 // Log a privilege escalation event
 int logger_log_privilege_event(const struct privilege_event *event);
 
+// Log a security monitoring event (MITRE ATT&CK detection)
+int logger_log_security_event(const struct security_event *event);
+
 // Cleanup logger
 void logger_cleanup(void);
 

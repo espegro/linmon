@@ -464,6 +464,77 @@ int logger_log_privilege_event(const struct privilege_event *event)
     return 0;
 }
 
+int logger_log_security_event(const struct security_event *event)
+{
+    char timestamp[64];
+    char comm_escaped[TASK_COMM_LEN * 6];
+    char filename_escaped[MAX_FILENAME_LEN * 6];
+    char username[USERNAME_MAX];
+    char username_escaped[USERNAME_MAX * 6];
+    const char *event_type;
+
+    if (!log_fp)
+        return -EINVAL;
+
+    format_timestamp(timestamp, sizeof(timestamp));
+
+    switch (event->type) {
+    case EVENT_SECURITY_PTRACE:
+        event_type = "security_ptrace";
+        break;
+    case EVENT_SECURITY_MODULE:
+        event_type = "security_module_load";
+        break;
+    case EVENT_SECURITY_MEMFD:
+        event_type = "security_memfd_create";
+        break;
+    default:
+        event_type = "security_unknown";
+    }
+
+    json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
+
+    if (enable_resolve_usernames) {
+        userdb_resolve(event->uid, username, sizeof(username));
+        json_escape(username, username_escaped, sizeof(username_escaped));
+    }
+
+    pthread_mutex_lock(&log_mutex);
+
+    fprintf(log_fp,
+            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
+            timestamp, event_type, event->pid, event->uid);
+
+    if (enable_resolve_usernames) {
+        fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
+
+    // Type-specific fields
+    if (event->type == EVENT_SECURITY_PTRACE) {
+        fprintf(log_fp, ",\"target_pid\":%u,\"ptrace_request\":%u",
+                event->target_pid, event->flags);
+    } else if (event->type == EVENT_SECURITY_MODULE) {
+        fprintf(log_fp, ",\"module_flags\":%u", event->flags);
+    } else if (event->type == EVENT_SECURITY_MEMFD) {
+        if (event->filename[0]) {
+            json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+            fprintf(log_fp, ",\"memfd_name\":\"%s\"", filename_escaped);
+        }
+        fprintf(log_fp, ",\"memfd_flags\":%u", event->flags);
+    }
+
+    int ret = fprintf(log_fp, "}\n");
+
+    pthread_mutex_unlock(&log_mutex);
+
+    if (!check_fprintf_result(ret))
+        return -EIO;
+
+    return 0;
+}
+
 void logger_cleanup(void)
 {
     if (log_fp) {
