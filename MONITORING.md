@@ -128,6 +128,61 @@ LinMon logs the following event types:
 }
 ```
 
+### Security Events (MITRE ATT&CK)
+
+LinMon detects various attack techniques mapped to the MITRE ATT&CK framework.
+
+#### Credential File Access (T1003.008)
+- `security_cred_read` - Suspicious read of authentication/authorization files
+
+Monitors reads of sensitive files by non-whitelisted processes:
+- `/etc/shadow`, `/etc/gshadow` - Password hashes
+- `/etc/sudoers`, `/etc/sudoers.d/*` - Sudo configuration
+- `/etc/ssh/*` - SSH configuration, authorized_keys
+- `/etc/pam.d/*` - PAM authentication configuration
+
+**Fields**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_cred_read",
+  "pid": 12345,
+  "uid": 1000,
+  "username": "attacker",
+  "comm": "cat",
+  "cred_file": "shadow",
+  "path": "/etc/shadow",
+  "open_flags": 0
+}
+```
+
+**cred_file values**: `shadow`, `gshadow`, `sudoers`, `ssh_config`, `pam_config`
+
+#### LD_PRELOAD Hijacking (T1574.006)
+- `security_ldpreload` - Write attempt to /etc/ld.so.preload
+
+**Fields**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_ldpreload",
+  "pid": 12345,
+  "uid": 0,
+  "comm": "malware",
+  "path": "/etc/ld.so.preload",
+  "open_flags": 577
+}
+```
+
+#### Other Security Events
+- `security_ptrace` - T1055 Process Injection (debugger attachment)
+- `security_module_load` - T1547.006 Kernel Module Loading
+- `security_memfd_create` - T1620 Fileless Malware (anonymous memory execution)
+- `security_bind` - T1571 Bind Shell / C2 Server Detection
+- `security_unshare` - T1611 Container Escape (namespace manipulation)
+- `security_execveat` - T1620 Fileless Execution (fd-based exec)
+- `security_bpf` - T1014 eBPF Rootkit Detection
+
 ## Common Analysis Patterns
 
 ### Security Monitoring
@@ -175,6 +230,49 @@ grep '"type":"process_exec"' /var/log/linmon/events.json | \
 grep '"type":"process_exec"' /var/log/linmon/events.json | \
   jq -r 'select(.sha256) | [.filename, .sha256] | @tsv' | \
   grep -v -F -f known_binaries.txt
+```
+
+#### Credential File Access Detection
+```bash
+# All credential file access attempts
+grep '"type":"security_cred_read"' /var/log/linmon/events.json | jq
+
+# Shadow file reads (password hash theft)
+grep '"type":"security_cred_read"' /var/log/linmon/events.json | \
+  jq 'select(.cred_file == "shadow")'
+
+# SSH config reconnaissance
+grep '"type":"security_cred_read"' /var/log/linmon/events.json | \
+  jq 'select(.cred_file == "ssh_config")'
+
+# Sudoers file access (privilege escalation recon)
+grep '"type":"security_cred_read"' /var/log/linmon/events.json | \
+  jq 'select(.cred_file == "sudoers")'
+```
+
+#### Rootkit Detection
+```bash
+# LD_PRELOAD hijacking attempts
+grep '"type":"security_ldpreload"' /var/log/linmon/events.json | jq
+
+# Kernel module loading (rootkit installation)
+grep '"type":"security_module_load"' /var/log/linmon/events.json | jq
+
+# eBPF program loading (potential eBPF rootkit)
+grep '"type":"security_bpf"' /var/log/linmon/events.json | jq
+```
+
+#### Fileless Malware Detection
+```bash
+# memfd_create usage (in-memory execution)
+grep '"type":"security_memfd_create"' /var/log/linmon/events.json | jq
+
+# execveat usage (fd-based execution)
+grep '"type":"security_execveat"' /var/log/linmon/events.json | jq
+
+# Correlation: memfd followed by execveat (fileless attack chain)
+grep -E '"type":"security_(memfd|execveat)"' /var/log/linmon/events.json | \
+  jq -r '[.timestamp, .type, .pid, .comm] | @tsv'
 ```
 
 ### User Activity Tracking

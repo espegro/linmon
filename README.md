@@ -359,6 +359,8 @@ jq 'select(.sid == 1000)' /var/log/linmon/events.json
 - `priv_setuid`, `priv_setgid`, `priv_sudo` - Privilege escalation
 
 **Security Monitoring (MITRE ATT&CK):**
+- `security_cred_read` - T1003.008 Credential File Access (shadow, sudoers, ssh, pam)
+- `security_ldpreload` - T1574.006 LD_PRELOAD Hijacking
 - `security_ptrace` - T1055 Process Injection
 - `security_module_load` - T1547.006 Kernel Module Loading
 - `security_memfd_create` - T1620 Fileless Malware
