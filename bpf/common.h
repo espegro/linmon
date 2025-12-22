@@ -67,6 +67,10 @@ enum event_type {
     EVENT_SECURITY_PTRACE = 14,   // T1055 - Process Injection
     EVENT_SECURITY_MODULE = 15,   // T1547.006 - Kernel Module Loading
     EVENT_SECURITY_MEMFD = 16,    // T1620 - Fileless Malware
+    EVENT_SECURITY_BIND = 17,     // T1571 - Bind shell / C2 server
+    EVENT_SECURITY_UNSHARE = 18,  // T1611 - Container escape / namespace manipulation
+    EVENT_SECURITY_EXECVEAT = 19, // T1620 - Fileless execution (fd-based)
+    EVENT_SECURITY_BPF = 20,      // T1014 - eBPF rootkit / packet manipulation
 };
 
 // Process information stored in map
@@ -87,6 +91,9 @@ struct process_event {
     __u32 ppid;
     __u32 uid;
     __u32 gid;
+    __u32 sid;                    // Session ID (login session)
+    __u32 pgid;                   // Process group ID (job control)
+    char tty[16];                 // TTY name (e.g., "pts/0") or empty for no TTY
     char comm[TASK_COMM_LEN];
     char filename[MAX_FILENAME_LEN];
     char cmdline[MAX_CMDLINE_LEN];
@@ -136,10 +143,13 @@ struct security_event {
     __u64 timestamp;
     __u32 pid;
     __u32 uid;
-    __u32 target_pid;                 // For ptrace: target process PID
-    __u32 flags;                      // ptrace request, module flags, memfd flags
+    __u32 target_pid;                 // For ptrace: target PID; for execveat: fd
+    __u32 flags;                      // ptrace request, module flags, memfd flags, unshare flags
+    __u16 port;                       // For bind: port number
+    __u16 family;                     // For bind: address family (AF_INET/AF_INET6)
+    __u32 extra;                      // For bpf: cmd; for execveat: AT_* flags
     char comm[TASK_COMM_LEN];
-    char filename[MAX_FILENAME_LEN];  // Module name or memfd name
+    char filename[MAX_FILENAME_LEN];  // Module name, memfd name, or execveat path
 };
 
 #endif /* __LINMON_COMMON_H */

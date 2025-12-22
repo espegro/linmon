@@ -9,6 +9,12 @@
 struct linmon_config {
     char *log_file;
     bool log_to_syslog;
+
+    // Built-in log rotation (can be disabled for external logrotate)
+    bool log_rotate;              // Enable built-in rotation (default: true)
+    unsigned long log_rotate_size; // Max size in bytes before rotation (default: 100MB)
+    int log_rotate_count;         // Number of rotated files to keep (default: 10)
+
     bool monitor_processes;
     bool monitor_process_exit;  // Monitor process exit events
     bool monitor_files;
@@ -46,6 +52,10 @@ struct linmon_config {
     bool monitor_ptrace;      // T1055 - Process injection via ptrace
     bool monitor_modules;     // T1547.006 - Kernel module loading
     bool monitor_memfd;       // T1620 - Fileless malware via memfd_create
+    bool monitor_bind;        // T1571 - Bind shells / C2 servers
+    bool monitor_unshare;     // T1611 - Container escape / namespace manipulation
+    bool monitor_execveat;    // T1620 - Fileless execution (fd-based)
+    bool monitor_bpf;         // T1014 - eBPF rootkit / packet manipulation
 };
 
 // Load configuration from file

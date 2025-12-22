@@ -240,13 +240,25 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     // Security monitoring events (MITRE ATT&CK detection)
     case EVENT_SECURITY_PTRACE:
     case EVENT_SECURITY_MODULE:
-    case EVENT_SECURITY_MEMFD: {
+    case EVENT_SECURITY_MEMFD:
+    case EVENT_SECURITY_BIND:
+    case EVENT_SECURITY_UNSHARE:
+    case EVENT_SECURITY_EXECVEAT:
+    case EVENT_SECURITY_BPF: {
         // Check respective config flags
         if (type == EVENT_SECURITY_PTRACE && !global_config.monitor_ptrace)
             return 0;
         if (type == EVENT_SECURITY_MODULE && !global_config.monitor_modules)
             return 0;
         if (type == EVENT_SECURITY_MEMFD && !global_config.monitor_memfd)
+            return 0;
+        if (type == EVENT_SECURITY_BIND && !global_config.monitor_bind)
+            return 0;
+        if (type == EVENT_SECURITY_UNSHARE && !global_config.monitor_unshare)
+            return 0;
+        if (type == EVENT_SECURITY_EXECVEAT && !global_config.monitor_execveat)
+            return 0;
+        if (type == EVENT_SECURITY_BPF && !global_config.monitor_bpf)
             return 0;
 
         if (data_sz < sizeof(struct security_event)) {
@@ -593,6 +605,34 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         "Memfd monitoring (T1620)");
     if (!link) failed_count++; else attached_count++;
 
+    // Security monitoring - bind (T1571 Bind Shell / C2)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_bind_tp,
+        skel->progs.handle_bind_kp,
+        "Bind monitoring (T1571)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - unshare (T1611 Container Escape)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_unshare_tp,
+        skel->progs.handle_unshare_kp,
+        "Unshare monitoring (T1611)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - execveat (T1620 Fileless Execution)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_execveat_tp,
+        skel->progs.handle_execveat_kp,
+        "Execveat monitoring (T1620)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - bpf (T1014 eBPF Rootkit)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_bpf_tp,
+        skel->progs.handle_bpf_kp,
+        "BPF monitoring (T1014)");
+    if (!link) failed_count++; else attached_count++;
+
     printf("\nAttachment summary: %d programs attached", attached_count);
     if (failed_count > 0) {
         printf(" (%d failed - some features may be unavailable)\n", failed_count);
@@ -633,7 +673,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.6\n");
+            printf("LinMon version 1.0.7\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -682,6 +722,13 @@ int main(int argc, char **argv)
     logger_set_enrichment(global_config.resolve_usernames,
                          global_config.hash_binaries);
 
+    // Configure built-in log rotation
+    const char *log_path = global_config.log_file ? global_config.log_file :
+                           "/var/log/linmon/events.json";
+    logger_set_rotation(log_path, global_config.log_rotate,
+                        global_config.log_rotate_size,
+                        global_config.log_rotate_count);
+
     printf("LinMon starting...\n");
     printf("Configuration:\n");
     printf("  UID range: %u-%u (0=unlimited)\n",
@@ -694,10 +741,21 @@ int main(int argc, char **argv)
     printf("  Redact sensitive: %s\n", global_config.redact_sensitive ? "yes" : "no");
     printf("  Resolve usernames: %s\n", global_config.resolve_usernames ? "yes" : "no");
     printf("  Hash binaries: %s\n", global_config.hash_binaries ? "yes" : "no");
+    if (global_config.log_rotate) {
+        printf("  Log rotation: enabled (%luMB, keep %d files)\n",
+               global_config.log_rotate_size / (1024 * 1024),
+               global_config.log_rotate_count);
+    } else {
+        printf("  Log rotation: disabled (use external logrotate)\n");
+    }
     printf("  Security monitoring:\n");
     printf("    ptrace (T1055): %s\n", global_config.monitor_ptrace ? "enabled" : "disabled");
     printf("    modules (T1547.006): %s\n", global_config.monitor_modules ? "enabled" : "disabled");
     printf("    memfd (T1620): %s\n", global_config.monitor_memfd ? "enabled" : "disabled");
+    printf("    bind (T1571): %s\n", global_config.monitor_bind ? "enabled" : "disabled");
+    printf("    unshare (T1611): %s\n", global_config.monitor_unshare ? "enabled" : "disabled");
+    printf("    execveat (T1620): %s\n", global_config.monitor_execveat ? "enabled" : "disabled");
+    printf("    bpf (T1014): %s\n", global_config.monitor_bpf ? "enabled" : "disabled");
 
     // Initialize filter
     filter_init(&global_config);

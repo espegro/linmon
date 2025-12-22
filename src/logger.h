@@ -13,6 +13,13 @@ int logger_init(const char *log_file);
 // Set enrichment options
 void logger_set_enrichment(bool resolve_usernames, bool hash_binaries);
 
+// Configure built-in log rotation
+// log_file: base path for rotation (e.g., "/var/log/linmon/events.json")
+// max_size: rotate when file exceeds this size (bytes)
+// max_files: number of rotated files to keep
+void logger_set_rotation(const char *log_file, bool enabled,
+                         unsigned long max_size, int max_files);
+
 // Replace logger file pointer atomically (for config reload)
 void logger_replace(FILE *new_fp);
 

@@ -188,6 +188,48 @@ static __always_inline bool should_ignore_network(__u32 addr)
     return false;  // Address not in any ignored range
 }
 
+// Helper to fill session information (sid, pgid, tty)
+static __always_inline void fill_session_info(struct process_event *event,
+                                               struct task_struct *task)
+{
+    struct signal_struct *signal;
+    struct tty_struct *tty;
+    struct pid *session_pid;
+    struct pid *pgrp_pid;
+
+    // Initialize to safe defaults
+    event->sid = 0;
+    event->pgid = 0;
+    event->tty[0] = '\0';
+
+    signal = BPF_CORE_READ(task, signal);
+    if (!signal)
+        return;
+
+    // Read session ID (pid namespace aware)
+    session_pid = BPF_CORE_READ(signal, pids[PIDTYPE_SID]);
+    if (session_pid) {
+        // Get the numeric session ID from the pid struct
+        // For simplicity, use the task's session leader's pid
+        event->sid = BPF_CORE_READ(task, group_leader, tgid);
+    }
+
+    // Read process group ID
+    pgrp_pid = BPF_CORE_READ(signal, pids[PIDTYPE_PGID]);
+    if (pgrp_pid) {
+        // Use tgid of group leader as pgid approximation
+        event->pgid = BPF_CORE_READ(task, tgid);
+    }
+
+    // Read TTY name if available
+    tty = BPF_CORE_READ(signal, tty);
+    if (tty) {
+        // Read TTY name - tty->name is a char array
+        bpf_probe_read_kernel_str(&event->tty, sizeof(event->tty),
+                                   &tty->name);
+    }
+}
+
 // ============================================================================
 // PROCESS MONITORING
 // ============================================================================
@@ -233,6 +275,9 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
     event->ppid = BPF_CORE_READ(task, real_parent, tgid);
     event->uid = uid;
     event->gid = bpf_get_current_uid_gid() >> 32;
+
+    // Fill session info (sid, pgid, tty)
+    fill_session_info(event, task);
 
     // Read command name
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
@@ -292,6 +337,9 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
     event->uid = bpf_get_current_uid_gid();
     event->gid = bpf_get_current_uid_gid() >> 32;
     event->exit_code = BPF_CORE_READ(task, exit_code);
+
+    // Fill session info (sid, pgid, tty)
+    fill_session_info(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -1014,6 +1062,9 @@ static __always_inline int handle_ptrace_common(long request, __u32 target_pid)
     event->uid = uid;
     event->target_pid = target_pid;
     event->flags = (__u32)request;
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->filename[0] = '\0';
 
@@ -1060,6 +1111,9 @@ int handle_finit_module_tp(struct trace_event_raw_sys_enter *ctx)
     event->uid = uid;
     event->target_pid = 0;
     event->flags = (__u32)ctx->args[2];  // Module flags
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->filename[0] = '\0';  // Can't easily get module name from fd
 
@@ -1082,6 +1136,9 @@ int handle_finit_module_kp(struct pt_regs *ctx)
     event->uid = uid;
     event->target_pid = 0;
     event->flags = (__u32)PT_REGS_PARM3(ctx);
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->filename[0] = '\0';
 
@@ -1105,6 +1162,9 @@ int handle_init_module_tp(struct trace_event_raw_sys_enter *ctx)
     event->uid = uid;
     event->target_pid = 0;
     event->flags = 0;  // Legacy syscall doesn't have flags
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->filename[0] = '\0';
 
@@ -1127,6 +1187,9 @@ int handle_init_module_kp(struct pt_regs *ctx)
     event->uid = uid;
     event->target_pid = 0;
     event->flags = 0;
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->filename[0] = '\0';
 
@@ -1159,6 +1222,9 @@ static __always_inline int handle_memfd_common(const char *name, unsigned int fl
     event->uid = uid;
     event->target_pid = 0;
     event->flags = flags;
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
     // Read memfd name from userspace
@@ -1186,4 +1252,279 @@ int handle_memfd_create_kp(struct pt_regs *ctx)
     const char *name = (const char *)PT_REGS_PARM1(ctx);
     unsigned int flags = (unsigned int)PT_REGS_PARM2(ctx);
     return handle_memfd_common(name, flags);
+}
+
+// ============================================================================
+// SECURITY MONITORING - Bind Shell Detection (MITRE ATT&CK T1571)
+// ============================================================================
+
+// bind() syscall - detects servers listening on ports (bind shells, C2)
+static __always_inline int handle_bind_common(int fd, struct sockaddr *addr, int addrlen)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    if (!should_monitor_uid(uid))
+        return 0;
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Read address family
+    __u16 family = 0;
+    bpf_probe_read_user(&family, sizeof(family), &addr->sa_family);
+
+    // Only monitor IPv4 and IPv6
+    if (family != AF_INET && family != AF_INET6)
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_BIND;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = fd;  // Store fd in target_pid field
+    event->flags = 0;
+    event->family = family;
+    event->extra = 0;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    // Extract port based on address family
+    if (family == AF_INET) {
+        struct sockaddr_in sin;
+        bpf_probe_read_user(&sin, sizeof(sin), addr);
+        event->port = __bpf_ntohs(sin.sin_port);
+    } else if (family == AF_INET6) {
+        struct sockaddr_in6 sin6;
+        bpf_probe_read_user(&sin6, sizeof(sin6), addr);
+        event->port = __bpf_ntohs(sin6.sin6_port);
+    }
+
+    // Skip ephemeral/dynamic ports (typically >= 32768) unless port 0
+    // Port 0 means OS assigns a port, which is normal client behavior
+    if (event->port == 0) {
+        bpf_ringbuf_discard(event, 0);
+        return 0;
+    }
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_bind")
+int handle_bind_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int fd = (int)ctx->args[0];
+    struct sockaddr *addr = (struct sockaddr *)ctx->args[1];
+    int addrlen = (int)ctx->args[2];
+    return handle_bind_common(fd, addr, addrlen);
+}
+
+SEC("kprobe/__x64_sys_bind")
+int handle_bind_kp(struct pt_regs *ctx)
+{
+    int fd = (int)PT_REGS_PARM1(ctx);
+    struct sockaddr *addr = (struct sockaddr *)PT_REGS_PARM2(ctx);
+    int addrlen = (int)PT_REGS_PARM3(ctx);
+    return handle_bind_common(fd, addr, addrlen);
+}
+
+// ============================================================================
+// SECURITY MONITORING - Container Escape Detection (MITRE ATT&CK T1611)
+// ============================================================================
+
+// unshare() syscall - detects namespace manipulation (container escapes)
+// Key flags to watch:
+// CLONE_NEWNS    = 0x00020000 - Mount namespace
+// CLONE_NEWPID   = 0x20000000 - PID namespace
+// CLONE_NEWNET   = 0x40000000 - Network namespace
+// CLONE_NEWUSER  = 0x10000000 - User namespace
+// CLONE_NEWUTS   = 0x04000000 - UTS namespace
+// CLONE_NEWIPC   = 0x08000000 - IPC namespace
+// CLONE_NEWCGROUP= 0x02000000 - Cgroup namespace
+
+static __always_inline int handle_unshare_common(unsigned long flags)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    if (!should_monitor_uid(uid))
+        return 0;
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Only log if namespace-related flags are set
+    // These are the interesting ones for security monitoring
+    unsigned long ns_flags = 0x7E020000;  // All CLONE_NEW* flags
+    if (!(flags & ns_flags))
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_UNSHARE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = (__u32)flags;
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_unshare")
+int handle_unshare_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    unsigned long flags = (unsigned long)ctx->args[0];
+    return handle_unshare_common(flags);
+}
+
+SEC("kprobe/__x64_sys_unshare")
+int handle_unshare_kp(struct pt_regs *ctx)
+{
+    unsigned long flags = (unsigned long)PT_REGS_PARM1(ctx);
+    return handle_unshare_common(flags);
+}
+
+// ============================================================================
+// SECURITY MONITORING - Fileless Execution (MITRE ATT&CK T1620)
+// ============================================================================
+
+// execveat() syscall - fd-based execution, enables truly fileless malware
+// AT_EMPTY_PATH (0x1000) with empty pathname = execute fd directly
+// This completes memfd_create detection: memfd_create() -> write ELF -> execveat()
+
+static __always_inline int handle_execveat_common(int dirfd, const char *pathname,
+                                                   int flags)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    if (!should_monitor_uid(uid))
+        return 0;
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_EXECVEAT;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = dirfd;  // Store fd in target_pid
+    event->flags = 0;
+    event->port = 0;
+    event->family = 0;
+    event->extra = (__u32)flags;  // AT_EMPTY_PATH, AT_SYMLINK_NOFOLLOW, etc.
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+
+    // Read pathname if available
+    if (pathname) {
+        bpf_probe_read_user_str(&event->filename, sizeof(event->filename), pathname);
+    } else {
+        event->filename[0] = '\0';
+    }
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_execveat")
+int handle_execveat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int dirfd = (int)ctx->args[0];
+    const char *pathname = (const char *)ctx->args[1];
+    // args[2] = argv, args[3] = envp
+    int flags = (int)ctx->args[4];
+    return handle_execveat_common(dirfd, pathname, flags);
+}
+
+SEC("kprobe/__x64_sys_execveat")
+int handle_execveat_kp(struct pt_regs *ctx)
+{
+    int dirfd = (int)PT_REGS_PARM1(ctx);
+    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
+    // PARM3 = argv, PARM4 = envp
+    int flags = (int)PT_REGS_PARM5(ctx);
+    return handle_execveat_common(dirfd, pathname, flags);
+}
+
+// ============================================================================
+// SECURITY MONITORING - eBPF Rootkit Detection (MITRE ATT&CK T1014)
+// ============================================================================
+
+// bpf() syscall - detects loading of BPF programs (potential rootkits)
+// Key commands:
+// BPF_PROG_LOAD = 5 - Load a BPF program (most interesting for rootkit detection)
+// BPF_MAP_CREATE = 0 - Create a BPF map
+// BPF_BTF_LOAD = 18 - Load BTF data
+
+#define BPF_MAP_CREATE    0
+#define BPF_PROG_LOAD     5
+#define BPF_BTF_LOAD      18
+
+static __always_inline int handle_bpf_common(int cmd, unsigned int attr_size)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+
+    // BPF operations require CAP_BPF/CAP_SYS_ADMIN, so usually uid=0
+    // But we still want to log all BPF program loads for auditing
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Only log interesting commands
+    if (cmd != BPF_PROG_LOAD && cmd != BPF_MAP_CREATE && cmd != BPF_BTF_LOAD)
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    event->type = EVENT_SECURITY_BPF;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = 0;
+    event->port = 0;
+    event->family = 0;
+    event->extra = (__u32)cmd;  // BPF command
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    event->filename[0] = '\0';
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_bpf")
+int handle_bpf_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int cmd = (int)ctx->args[0];
+    unsigned int attr_size = (unsigned int)ctx->args[2];
+    return handle_bpf_common(cmd, attr_size);
+}
+
+SEC("kprobe/__x64_sys_bpf")
+int handle_bpf_kp(struct pt_regs *ctx)
+{
+    int cmd = (int)PT_REGS_PARM1(ctx);
+    unsigned int attr_size = (unsigned int)PT_REGS_PARM3(ctx);
+    return handle_bpf_common(cmd, attr_size);
 }

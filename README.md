@@ -31,7 +31,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **Low Overhead**: Efficient kernel-space filtering minimizes performance impact
 - **Username Resolution**: Cached UID→username lookups (256 entry cache)
 - **File Hash Caching**: LRU cache (1000 entries) for binary hashes
-- **Log Rotation**: Automatic rotation with logrotate (30 days, 100MB limit)
+- **Log Rotation**: Built-in rotation (100MB, 10 files) or external logrotate support
 - **Config Reload**: SIGHUP support for live config updates without restart
 
 ## Architecture
@@ -189,27 +189,170 @@ Key configuration options:
 - `redact_sensitive=true` - Redact passwords/tokens from command lines
 - `ignore_processes=` - Comma-separated blacklist (e.g., `systemd,cron`)
 - `only_processes=` - Comma-separated whitelist (empty = log all)
+- `log_rotate=true` - Built-in log rotation (disable for external logrotate)
+- `log_rotate_size=100M` - Max file size before rotation (K/M/G suffixes)
+- `log_rotate_count=10` - Number of rotated files to keep
 
 ## Logs
 
-Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSON object per line):
+Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSON object per line).
 
+### Example Log Output
+
+#### Process Execution (Interactive Shell)
 ```json
-{"timestamp":"2024-11-30T10:15:30.123Z","type":"process_exec","pid":12345,"ppid":1234,"uid":1000,"username":"alice","comm":"bash","filename":"/usr/bin/bash","cmdline":"/bin/bash -c ls","sha256":"abc123..."}
-{"timestamp":"2024-11-30T10:15:31.456Z","type":"net_connect_tcp","pid":12346,"uid":1000,"username":"alice","comm":"curl","saddr":"192.168.1.100","daddr":"1.1.1.1","sport":54321,"dport":443}
+{
+  "timestamp": "2024-12-22T14:30:15.123Z",
+  "type": "process_exec",
+  "pid": 12345,
+  "ppid": 1000,
+  "sid": 1000,
+  "pgid": 12345,
+  "uid": 1000,
+  "username": "alice",
+  "tty": "pts/0",
+  "comm": "git",
+  "filename": "/usr/bin/git",
+  "cmdline": "git status"
+}
 ```
 
-**Event Types**:
+#### Process Execution (Background/Daemon - no TTY)
+```json
+{
+  "timestamp": "2024-12-22T14:30:16.456Z",
+  "type": "process_exec",
+  "pid": 5678,
+  "ppid": 1,
+  "sid": 5678,
+  "pgid": 5678,
+  "uid": 0,
+  "username": "root",
+  "tty": "",
+  "comm": "cron",
+  "filename": "/usr/sbin/cron"
+}
+```
+
+#### Network Connection (TCP)
+```json
+{
+  "timestamp": "2024-12-22T14:30:17.789Z",
+  "type": "net_connect_tcp",
+  "pid": 12346,
+  "uid": 1000,
+  "username": "alice",
+  "comm": "curl",
+  "family": 2,
+  "protocol": 6,
+  "saddr": "192.168.1.100",
+  "daddr": "142.250.74.110",
+  "sport": 54321,
+  "dport": 443
+}
+```
+
+#### Privilege Escalation (sudo)
+```json
+{
+  "timestamp": "2024-12-22T14:30:18.012Z",
+  "type": "priv_sudo",
+  "pid": 12347,
+  "old_uid": 1000,
+  "new_uid": 0,
+  "comm": "sudo",
+  "target_comm": "/usr/bin/apt"
+}
+```
+
+#### Security Event - Bind Shell Detection (T1571)
+```json
+{
+  "timestamp": "2024-12-22T14:30:19.345Z",
+  "type": "security_bind",
+  "pid": 9999,
+  "uid": 1000,
+  "username": "attacker",
+  "comm": "nc",
+  "port": 4444,
+  "family": 2,
+  "fd": 3
+}
+```
+
+#### Security Event - Container Escape (T1611)
+```json
+{
+  "timestamp": "2024-12-22T14:30:20.678Z",
+  "type": "security_unshare",
+  "pid": 8888,
+  "uid": 1000,
+  "username": "user",
+  "comm": "unshare",
+  "unshare_flags": 268435456
+}
+```
+
+#### Security Event - Fileless Malware (T1620)
+```json
+{
+  "timestamp": "2024-12-22T14:30:21.901Z",
+  "type": "security_memfd_create",
+  "pid": 7777,
+  "uid": 1000,
+  "username": "user",
+  "comm": "python3",
+  "memfd_name": "jit-code",
+  "memfd_flags": 1
+}
+```
+
+### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `sid` | Session ID - groups all processes from same login session |
+| `pgid` | Process Group ID - for job control (pipes, etc.) |
+| `tty` | Terminal name (e.g., "pts/0") - empty for background processes |
+| `username` | Resolved username (requires `resolve_usernames = true`) |
+
+### Filtering Interactive vs Background
+
+```bash
+# Only interactive commands (with TTY)
+jq 'select(.tty != "")' /var/log/linmon/events.json
+
+# Only background processes (no TTY)
+jq 'select(.tty == "")' /var/log/linmon/events.json
+
+# All activity from one SSH session
+jq 'select(.sid == 1000)' /var/log/linmon/events.json
+```
+
+### Event Types
+
+**Core Monitoring:**
 - `process_exec`, `process_exit` - Process execution and termination
 - `net_connect_tcp`, `net_accept_tcp` - TCP connections
 - `net_send_udp` - UDP traffic
-- `file_open`, `file_create`, `file_delete`, `file_modify` - File operations
+- `file_create`, `file_delete`, `file_modify` - File operations
 - `priv_setuid`, `priv_setgid`, `priv_sudo` - Privilege escalation
 
-**Log Rotation**: Automatic rotation via logrotate:
-- Rotates daily or at 100MB
-- Keeps 30 days of compressed logs
-- Maintains proper permissions (0640 nobody:nogroup)
+**Security Monitoring (MITRE ATT&CK):**
+- `security_ptrace` - T1055 Process Injection
+- `security_module_load` - T1547.006 Kernel Module Loading
+- `security_memfd_create` - T1620 Fileless Malware
+- `security_bind` - T1571 Bind Shell / C2 Server
+- `security_unshare` - T1611 Container Escape
+- `security_execveat` - T1620 Fileless Execution
+- `security_bpf` - T1014 eBPF Rootkit
+
+**Log Rotation**: LinMon includes built-in log rotation that is **on by default**:
+- Rotates when file reaches 100MB (configurable via `log_rotate_size`)
+- Keeps 10 rotated files (configurable via `log_rotate_count`)
+- Pattern: `events.json` → `events.json.1` → `events.json.2` → ...
+- Disable with `log_rotate = false` to use external logrotate instead
+- When disabled, LinMon still handles SIGHUP for log file reopening
 
 ## Monitoring & Analysis
 

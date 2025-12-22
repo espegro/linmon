@@ -15,6 +15,12 @@ static void set_defaults(struct linmon_config *config)
 {
     config->log_file = NULL;
     config->log_to_syslog = false;
+
+    // Built-in log rotation defaults
+    config->log_rotate = true;                  // On by default
+    config->log_rotate_size = 100 * 1024 * 1024; // 100MB
+    config->log_rotate_count = 10;              // Keep 10 files
+
     config->monitor_processes = true;
     config->monitor_process_exit = true;  // Default: log exit events
     config->monitor_files = false;
@@ -37,6 +43,10 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_ptrace = false;
     config->monitor_modules = false;
     config->monitor_memfd = false;
+    config->monitor_bind = false;
+    config->monitor_unshare = false;
+    config->monitor_execveat = false;
+    config->monitor_bpf = false;
 }
 
 int load_config(struct linmon_config *config, const char *config_file)
@@ -100,6 +110,35 @@ int load_config(struct linmon_config *config, const char *config_file)
             }
         } else if (strcmp(key, "log_to_syslog") == 0) {
             config->log_to_syslog = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "log_rotate") == 0) {
+            config->log_rotate = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "log_rotate_size") == 0) {
+            // Parse size with optional suffix (K, M, G)
+            char *endptr;
+            unsigned long val = strtoul(value, &endptr, 10);
+            if (*endptr == 'K' || *endptr == 'k') {
+                val *= 1024;
+            } else if (*endptr == 'M' || *endptr == 'm') {
+                val *= 1024 * 1024;
+            } else if (*endptr == 'G' || *endptr == 'g') {
+                val *= 1024 * 1024 * 1024;
+            } else if (*endptr != '\0') {
+                fprintf(stderr, "Invalid log_rotate_size value: %s\n", value);
+                continue;
+            }
+            if (val < 1024 * 1024) {
+                fprintf(stderr, "log_rotate_size too small (min 1M): %s\n", value);
+                continue;
+            }
+            config->log_rotate_size = val;
+        } else if (strcmp(key, "log_rotate_count") == 0) {
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 1 || val > 100) {
+                fprintf(stderr, "Invalid log_rotate_count (1-100): %s\n", value);
+                continue;
+            }
+            config->log_rotate_count = (int)val;
         } else if (strcmp(key, "monitor_processes") == 0) {
             config->monitor_processes = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_process_exit") == 0) {
@@ -194,6 +233,14 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->monitor_modules = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_memfd") == 0) {
             config->monitor_memfd = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_bind") == 0) {
+            config->monitor_bind = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_unshare") == 0) {
+            config->monitor_unshare = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_execveat") == 0) {
+            config->monitor_execveat = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_bpf") == 0) {
+            config->monitor_bpf = (strcmp(value, "true") == 0);
         }
     }
 

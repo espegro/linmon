@@ -9,6 +9,8 @@
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "logger.h"
 #include "userdb.h"
@@ -20,6 +22,14 @@ static bool enable_resolve_usernames = false;
 static bool enable_hash_binaries = false;
 static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
+
+// Log rotation settings
+static bool rotation_enabled = false;
+static char rotation_base_path[512] = {0};
+static unsigned long rotation_max_size = 100 * 1024 * 1024;  // 100MB default
+static int rotation_max_files = 10;
+static unsigned long bytes_written = 0;
+static const unsigned long ROTATION_CHECK_INTERVAL = 4096;  // Check every 4KB written
 
 int logger_init(const char *log_file)
 {
@@ -38,6 +48,90 @@ void logger_set_enrichment(bool resolve_usernames, bool hash_binaries)
 {
     enable_resolve_usernames = resolve_usernames;
     enable_hash_binaries = hash_binaries;
+}
+
+void logger_set_rotation(const char *log_file, bool enabled,
+                         unsigned long max_size, int max_files)
+{
+    rotation_enabled = enabled;
+    if (log_file && strlen(log_file) < sizeof(rotation_base_path)) {
+        strncpy(rotation_base_path, log_file, sizeof(rotation_base_path) - 1);
+        rotation_base_path[sizeof(rotation_base_path) - 1] = '\0';
+    }
+    rotation_max_size = max_size;
+    rotation_max_files = max_files;
+    bytes_written = 0;
+}
+
+// Perform log rotation: events.json -> events.json.1 -> events.json.2 -> ...
+// Must be called with log_mutex held
+static void rotate_log_file(void)
+{
+    char old_path[600];
+    char new_path[600];
+    FILE *new_fp;
+
+    if (!rotation_enabled || rotation_base_path[0] == '\0')
+        return;
+
+    // Close current file
+    if (log_fp) {
+        fclose(log_fp);
+        log_fp = NULL;
+    }
+
+    // Rotate existing files: .9 -> .10, .8 -> .9, ..., .1 -> .2
+    for (int i = rotation_max_files - 1; i >= 1; i--) {
+        snprintf(old_path, sizeof(old_path), "%s.%d", rotation_base_path, i);
+        snprintf(new_path, sizeof(new_path), "%s.%d", rotation_base_path, i + 1);
+
+        // Delete oldest if it exists and we're at max
+        if (i == rotation_max_files - 1) {
+            unlink(new_path);  // Ignore error if doesn't exist
+        }
+
+        // Rename .N to .N+1
+        rename(old_path, new_path);  // Ignore error if doesn't exist
+    }
+
+    // Rename current to .1
+    snprintf(new_path, sizeof(new_path), "%s.1", rotation_base_path);
+    rename(rotation_base_path, new_path);
+
+    // Open fresh log file
+    new_fp = fopen(rotation_base_path, "a");
+    if (new_fp) {
+        setlinebuf(new_fp);
+        log_fp = new_fp;
+        bytes_written = 0;
+        fprintf(stderr, "Log rotated: %s\n", rotation_base_path);
+    } else {
+        fprintf(stderr, "ERROR: Failed to reopen log after rotation: %s\n",
+                strerror(errno));
+    }
+}
+
+// Check if rotation is needed and perform it
+// Must be called with log_mutex held
+static void check_rotation(void)
+{
+    struct stat st;
+
+    if (!rotation_enabled || rotation_base_path[0] == '\0')
+        return;
+
+    // Only check file size periodically to reduce stat() calls
+    if (bytes_written < ROTATION_CHECK_INTERVAL)
+        return;
+
+    bytes_written = 0;  // Reset counter
+
+    // Get actual file size
+    if (log_fp && fstat(fileno(log_fp), &st) == 0) {
+        if ((unsigned long)st.st_size >= rotation_max_size) {
+            rotate_log_file();
+        }
+    }
 }
 
 void logger_replace(FILE *new_fp)
@@ -62,7 +156,8 @@ void logger_replace(FILE *new_fp)
         fclose(old_fp);
 }
 
-// Check fprintf result and report errors (with rate limiting)
+// Check fprintf result, track bytes written, and trigger rotation if needed
+// Must be called with log_mutex held
 static inline bool check_fprintf_result(int ret)
 {
     if (ret < 0) {
@@ -78,6 +173,14 @@ static inline bool check_fprintf_result(int ret)
         }
         return false;
     }
+
+    // Track bytes written for rotation check
+    if (ret > 0) {
+        bytes_written += ret;
+        // Check if rotation is needed
+        check_rotation();
+    }
+
     return true;
 }
 
@@ -209,12 +312,23 @@ int logger_log_process_event(const struct process_event *event)
 
     fprintf(log_fp,
             "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "\"sid\":%u,\"pgid\":%u,"
             "\"uid\":%u",
             timestamp, event_type, event->pid, event->ppid,
+            event->sid, event->pgid,
             event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    // TTY field - empty string means no controlling terminal (background process)
+    if (event->tty[0]) {
+        char tty_escaped[16 * 6];
+        json_escape(event->tty, tty_escaped, sizeof(tty_escaped));
+        fprintf(log_fp, ",\"tty\":\"%s\"", tty_escaped);
+    } else {
+        fprintf(log_fp, ",\"tty\":\"\"");
     }
 
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
@@ -488,6 +602,18 @@ int logger_log_security_event(const struct security_event *event)
     case EVENT_SECURITY_MEMFD:
         event_type = "security_memfd_create";
         break;
+    case EVENT_SECURITY_BIND:
+        event_type = "security_bind";
+        break;
+    case EVENT_SECURITY_UNSHARE:
+        event_type = "security_unshare";
+        break;
+    case EVENT_SECURITY_EXECVEAT:
+        event_type = "security_execveat";
+        break;
+    case EVENT_SECURITY_BPF:
+        event_type = "security_bpf";
+        break;
     default:
         event_type = "security_unknown";
     }
@@ -523,6 +649,20 @@ int logger_log_security_event(const struct security_event *event)
             fprintf(log_fp, ",\"memfd_name\":\"%s\"", filename_escaped);
         }
         fprintf(log_fp, ",\"memfd_flags\":%u", event->flags);
+    } else if (event->type == EVENT_SECURITY_BIND) {
+        fprintf(log_fp, ",\"port\":%u,\"family\":%u,\"fd\":%u",
+                event->port, event->family, event->target_pid);
+    } else if (event->type == EVENT_SECURITY_UNSHARE) {
+        fprintf(log_fp, ",\"unshare_flags\":%u", event->flags);
+    } else if (event->type == EVENT_SECURITY_EXECVEAT) {
+        fprintf(log_fp, ",\"dirfd\":%d,\"at_flags\":%u",
+                (int)event->target_pid, event->extra);
+        if (event->filename[0]) {
+            json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+            fprintf(log_fp, ",\"pathname\":\"%s\"", filename_escaped);
+        }
+    } else if (event->type == EVENT_SECURITY_BPF) {
+        fprintf(log_fp, ",\"bpf_cmd\":%u", event->extra);
     }
 
     int ret = fprintf(log_fp, "}\n");
