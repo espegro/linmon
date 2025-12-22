@@ -27,14 +27,14 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_tcp = true;
     config->monitor_udp = false;  // Default: off (can be very noisy)
     config->verbosity = 1;
-    config->min_uid = 1000;  // Default: ignore system users
+    config->min_uid = 0;     // Default: monitor all users including root
     config->max_uid = 0;     // 0 = no limit
     config->require_tty = false;       // Default: log all processes (GUI + terminal)
     config->ignore_threads = false;    // Default: log both processes and threads
     config->capture_cmdline = true;
     config->redact_sensitive = true;
     config->resolve_usernames = true;  // Default: resolve UIDs
-    config->hash_binaries = false;     // Default: don't hash (performance)
+    config->hash_binaries = true;      // Default: hash for security monitoring
     config->ignore_processes = NULL;
     config->only_processes = NULL;
     config->ignore_networks = NULL;
@@ -47,6 +47,8 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_unshare = false;
     config->monitor_execveat = false;
     config->monitor_bpf = false;
+    config->monitor_cred_read = true;   // Default: on (low noise, high value)
+    config->monitor_ldpreload = true;   // Default: on (critical detection)
 }
 
 int load_config(struct linmon_config *config, const char *config_file)
@@ -241,6 +243,10 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->monitor_execveat = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_bpf") == 0) {
             config->monitor_bpf = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_cred_read") == 0) {
+            config->monitor_cred_read = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_ldpreload") == 0) {
+            config->monitor_ldpreload = (strcmp(value, "true") == 0);
         }
     }
 

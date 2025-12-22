@@ -56,6 +56,8 @@ struct linmon_config {
     bool monitor_unshare;     // T1611 - Container escape / namespace manipulation
     bool monitor_execveat;    // T1620 - Fileless execution (fd-based)
     bool monitor_bpf;         // T1014 - eBPF rootkit / packet manipulation
+    bool monitor_cred_read;   // T1003.008 - Credential file read (/etc/shadow)
+    bool monitor_ldpreload;   // T1574.006 - LD_PRELOAD hijacking
 };
 
 // Load configuration from file

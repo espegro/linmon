@@ -71,6 +71,8 @@ enum event_type {
     EVENT_SECURITY_UNSHARE = 18,  // T1611 - Container escape / namespace manipulation
     EVENT_SECURITY_EXECVEAT = 19, // T1620 - Fileless execution (fd-based)
     EVENT_SECURITY_BPF = 20,      // T1014 - eBPF rootkit / packet manipulation
+    EVENT_SECURITY_CRED_READ = 21,   // T1003.008 - Credential file read (/etc/shadow)
+    EVENT_SECURITY_LDPRELOAD = 22,   // T1574.006 - LD_PRELOAD hijacking
 };
 
 // Process information stored in map

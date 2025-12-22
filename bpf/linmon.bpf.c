@@ -1528,3 +1528,226 @@ int handle_bpf_kp(struct pt_regs *ctx)
     unsigned int attr_size = (unsigned int)PT_REGS_PARM3(ctx);
     return handle_bpf_common(cmd, attr_size);
 }
+
+// ============================================================================
+// SECURITY MONITORING - Credential File Access (MITRE ATT&CK T1003.008)
+// ============================================================================
+// Monitors reads of /etc/shadow, /etc/gshadow - files that should only be
+// accessed by authentication daemons. Whitelists legitimate processes.
+
+// Check if comm starts with a given prefix (for whitelist checking)
+// Uses direct byte comparison to avoid function call issues
+#define COMM_STARTS_WITH(comm, str) ( \
+    (str[0] == '\0') || \
+    ((comm)[0] == (str)[0] && ((str)[1] == '\0' || \
+    ((comm)[1] == (str)[1] && ((str)[2] == '\0' || \
+    ((comm)[2] == (str)[2] && ((str)[3] == '\0' || \
+    ((comm)[3] == (str)[3] && ((str)[4] == '\0' || \
+    ((comm)[4] == (str)[4] && ((str)[5] == '\0' || \
+    ((comm)[5] == (str)[5] && ((str)[6] == '\0' || \
+    ((comm)[6] == (str)[6] && ((str)[7] == '\0' || \
+    ((comm)[7] == (str)[7]))))))))))))))))
+
+// Check if process is a legitimate credential reader
+// Returns 1 if whitelisted (should NOT log), 0 if suspicious (should log)
+static __always_inline int is_legit_cred_reader(const char *comm)
+{
+    // Whitelist of legitimate processes that read /etc/shadow
+    // These are authentication daemons and password management tools
+    // Using prefix matching for efficiency
+
+    // Auth daemons
+    if (comm[0] == 'l' && comm[1] == 'o' && comm[2] == 'g' &&
+        comm[3] == 'i' && comm[4] == 'n') return 1;  // login
+    if (comm[0] == 's' && comm[1] == 's' && comm[2] == 'h' &&
+        comm[3] == 'd') return 1;  // sshd
+    if (comm[0] == 's' && comm[1] == 'u' &&
+        (comm[2] == '\0' || comm[2] == 'd')) return 1;  // su, sudo
+    if (comm[0] == 'p' && comm[1] == 'a' && comm[2] == 's' &&
+        comm[3] == 's' && comm[4] == 'w' && comm[5] == 'd') return 1;  // passwd
+
+    // User management tools
+    if (comm[0] == 'u' && comm[1] == 's' && comm[2] == 'e' &&
+        comm[3] == 'r') return 1;  // useradd, usermod, userdel
+    if (comm[0] == 'c' && comm[1] == 'h') {
+        if (comm[2] == 'p' && comm[3] == 'a') return 1;  // chpasswd
+        if (comm[2] == 'a' && comm[3] == 'g') return 1;  // chage
+    }
+    if (comm[0] == 'g' && comm[1] == 'r' && comm[2] == 'o' &&
+        comm[3] == 'u' && comm[4] == 'p') return 1;  // groupadd, groupmod
+    if (comm[0] == 'p' && comm[1] == 'w' && comm[2] == 'c' &&
+        comm[3] == 'k') return 1;  // pwck
+    if (comm[0] == 'g' && comm[1] == 'r' && comm[2] == 'p' &&
+        comm[3] == 'c' && comm[4] == 'k') return 1;  // grpck
+
+    // PAM / Auth helpers
+    if (comm[0] == 'u' && comm[1] == 'n' && comm[2] == 'i' &&
+        comm[3] == 'x' && comm[4] == '_') return 1;  // unix_chkpwd
+
+    // System services
+    if (comm[0] == 's' && comm[1] == 'y' && comm[2] == 's' &&
+        comm[3] == 't' && comm[4] == 'e' && comm[5] == 'm' &&
+        comm[6] == 'd') return 1;  // systemd*
+    if (comm[0] == 'p' && comm[1] == 'o' && comm[2] == 'l' &&
+        comm[3] == 'k' && comm[4] == 'i' && comm[5] == 't') return 1;  // polkitd
+    if (comm[0] == 's' && comm[1] == 's' && comm[2] == 's' &&
+        comm[3] == 'd') return 1;  // sssd
+    if (comm[0] == 'n' && comm[1] == 's' && comm[2] == 'c' &&
+        comm[3] == 'd') return 1;  // nscd
+
+    // Display managers
+    if (comm[0] == 'g' && comm[1] == 'd' && comm[2] == 'm') return 1;  // gdm*
+    if (comm[0] == 'l' && comm[1] == 'i' && comm[2] == 'g' &&
+        comm[3] == 'h' && comm[4] == 't' && comm[5] == 'd' &&
+        comm[6] == 'm') return 1;  // lightdm
+    if (comm[0] == 's' && comm[1] == 'd' && comm[2] == 'd' &&
+        comm[3] == 'm') return 1;  // sddm
+    if (comm[0] == 'x' && comm[1] == 'd' && comm[2] == 'm') return 1;  // xdm
+
+    // Cron/at
+    if (comm[0] == 'c' && comm[1] == 'r' && comm[2] == 'o' &&
+        comm[3] == 'n') return 1;  // cron
+    if (comm[0] == 'a' && comm[1] == 't' && comm[2] == 'd') return 1;  // atd
+
+    return 0;  // Not whitelisted - log it
+}
+
+// Check if path is a sensitive credential file
+// Returns file type: 1=shadow, 2=gshadow, 0=not sensitive
+static __always_inline int get_cred_file_type(const char *path)
+{
+    // Check for /etc/shadow
+    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && 
+        path[3] == 'c' && path[4] == '/' && path[5] == 's' &&
+        path[6] == 'h' && path[7] == 'a' && path[8] == 'd' &&
+        path[9] == 'o' && path[10] == 'w' && path[11] == '\0') {
+        return 1;  // /etc/shadow
+    }
+    // Check for /etc/gshadow
+    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && 
+        path[3] == 'c' && path[4] == '/' && path[5] == 'g' &&
+        path[6] == 's' && path[7] == 'h' && path[8] == 'a' &&
+        path[9] == 'd' && path[10] == 'o' && path[11] == 'w' && path[12] == '\0') {
+        return 2;  // /etc/gshadow
+    }
+    return 0;  // Not a sensitive file
+}
+
+// Check if path is /etc/ld.so.preload
+static __always_inline int is_ldpreload_file(const char *path)
+{
+    // Check for /etc/ld.so.preload (20 chars including null)
+    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && 
+        path[3] == 'c' && path[4] == '/' && path[5] == 'l' &&
+        path[6] == 'd' && path[7] == '.' && path[8] == 's' &&
+        path[9] == 'o' && path[10] == '.' && path[11] == 'p' &&
+        path[12] == 'r' && path[13] == 'e' && path[14] == 'l' &&
+        path[15] == 'o' && path[16] == 'a' && path[17] == 'd' && 
+        path[18] == '\0') {
+        return 1;
+    }
+    return 0;
+}
+
+// Unified handler for credential/ldpreload monitoring via openat
+static __always_inline int handle_security_openat(int dfd, const char *pathname, int flags)
+{
+    char path[64];  // Only need to check start of path
+    char comm[TASK_COMM_LEN];
+    __u32 uid;
+    int cred_type;
+    
+    if (!pathname)
+        return 0;
+    
+    // Read the path from userspace
+    if (bpf_probe_read_user_str(path, sizeof(path), pathname) < 0)
+        return 0;
+    
+    // Check for LD_PRELOAD file WRITE (T1574.006)
+    // Any write to /etc/ld.so.preload is highly suspicious
+    if (is_ldpreload_file(path)) {
+        // Only interested in writes (O_WRONLY, O_RDWR, O_CREAT, O_TRUNC)
+        if (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) {
+            uid = bpf_get_current_uid_gid();
+            
+            struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+            if (!event)
+                return 0;
+            
+            event->type = EVENT_SECURITY_LDPRELOAD;
+            event->timestamp = bpf_ktime_get_ns();
+            event->pid = bpf_get_current_pid_tgid() >> 32;
+            event->uid = uid;
+            event->target_pid = 0;
+            event->flags = flags;
+            event->port = 0;
+            event->family = 0;
+            event->extra = 0;
+            bpf_get_current_comm(&event->comm, sizeof(event->comm));
+            bpf_probe_read_user_str(&event->filename, sizeof(event->filename), pathname);
+            
+            bpf_ringbuf_submit(event, 0);
+        }
+        return 0;
+    }
+    
+    // Check for credential file READ (T1003.008)
+    cred_type = get_cred_file_type(path);
+    if (cred_type == 0)
+        return 0;  // Not a credential file
+    
+    // We want to detect READs - any open that's not purely write
+    // O_RDONLY = 0, so check if NOT (O_WRONLY without O_RDWR)
+    if ((flags & O_WRONLY) && !(flags & O_RDWR))
+        return 0;  // Write-only, not interesting for credential theft
+    
+    uid = bpf_get_current_uid_gid();
+    
+    // Rate limit
+    if (should_rate_limit(uid))
+        return 0;
+    
+    // Get process name and check whitelist
+    bpf_get_current_comm(&comm, sizeof(comm));
+    if (is_legit_cred_reader(comm))
+        return 0;  // Legitimate process, don't log
+    
+    // Suspicious credential file access - log it
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+    
+    event->type = EVENT_SECURITY_CRED_READ;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    event->target_pid = 0;
+    event->flags = flags;
+    event->port = 0;
+    event->family = 0;
+    event->extra = cred_type;  // 1=shadow, 2=gshadow
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    bpf_probe_read_user_str(&event->filename, sizeof(event->filename), pathname);
+    
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_openat")
+int handle_security_openat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int dfd = (int)ctx->args[0];
+    const char *pathname = (const char *)ctx->args[1];
+    int flags = (int)ctx->args[2];
+    return handle_security_openat(dfd, pathname, flags);
+}
+
+SEC("kprobe/__x64_sys_openat")
+int handle_security_openat_kp(struct pt_regs *ctx)
+{
+    int dfd = (int)PT_REGS_PARM1(ctx);
+    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
+    int flags = (int)PT_REGS_PARM3(ctx);
+    return handle_security_openat(dfd, pathname, flags);
+}

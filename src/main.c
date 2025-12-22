@@ -244,7 +244,9 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     case EVENT_SECURITY_BIND:
     case EVENT_SECURITY_UNSHARE:
     case EVENT_SECURITY_EXECVEAT:
-    case EVENT_SECURITY_BPF: {
+    case EVENT_SECURITY_BPF:
+    case EVENT_SECURITY_CRED_READ:
+    case EVENT_SECURITY_LDPRELOAD: {
         // Check respective config flags
         if (type == EVENT_SECURITY_PTRACE && !global_config.monitor_ptrace)
             return 0;
@@ -259,6 +261,10 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         if (type == EVENT_SECURITY_EXECVEAT && !global_config.monitor_execveat)
             return 0;
         if (type == EVENT_SECURITY_BPF && !global_config.monitor_bpf)
+            return 0;
+        if (type == EVENT_SECURITY_CRED_READ && !global_config.monitor_cred_read)
+            return 0;
+        if (type == EVENT_SECURITY_LDPRELOAD && !global_config.monitor_ldpreload)
             return 0;
 
         if (data_sz < sizeof(struct security_event)) {
@@ -633,6 +639,13 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         "BPF monitoring (T1014)");
     if (!link) failed_count++; else attached_count++;
 
+    // Security monitoring - credential read and LD_PRELOAD (T1003.008, T1574.006)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_security_openat_tp,
+        skel->progs.handle_security_openat_kp,
+        "Credential/LDPreload monitoring (T1003.008/T1574.006)");
+    if (!link) failed_count++; else attached_count++;
+
     printf("\nAttachment summary: %d programs attached", attached_count);
     if (failed_count > 0) {
         printf(" (%d failed - some features may be unavailable)\n", failed_count);
@@ -673,7 +686,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.7\n");
+            printf("LinMon version 1.0.8\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -756,6 +769,8 @@ int main(int argc, char **argv)
     printf("    unshare (T1611): %s\n", global_config.monitor_unshare ? "enabled" : "disabled");
     printf("    execveat (T1620): %s\n", global_config.monitor_execveat ? "enabled" : "disabled");
     printf("    bpf (T1014): %s\n", global_config.monitor_bpf ? "enabled" : "disabled");
+    printf("    cred_read (T1003.008): %s\n", global_config.monitor_cred_read ? "enabled" : "disabled");
+    printf("    ldpreload (T1574.006): %s\n", global_config.monitor_ldpreload ? "enabled" : "disabled");
 
     // Initialize filter
     filter_init(&global_config);

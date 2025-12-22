@@ -85,10 +85,12 @@ monitor_udp = false
 
 # UID filtering - only log events from users with UID >= min_uid
 # Examples:
-#   0    = Log all users including root and system users
-#   1000 = Ignore system users (typical for Ubuntu/Debian)
+#   0    = Log all users including root and system users (RECOMMENDED for security)
+#   1000 = Ignore system users, only log human users (reduces noise)
 #   500  = Ignore system users (typical for RHEL/CentOS older versions)
-min_uid = 1000
+# Default: 0 (monitor all users including root - important for security)
+# Note: Set to 1000 if you want to reduce noise from system services
+min_uid = 0
 
 # Maximum UID to monitor (0 = no limit)
 # Use this to exclude high UID ranges if needed
@@ -106,7 +108,8 @@ require_tty = false
 # true  = Only log main processes (pid == tgid), filter out threads
 #         Good for: Reducing noise from Firefox/Chrome thread pools
 # false = Log both main processes and threads
-# Recommendation: true to reduce noise from browser/GUI app threads
+# Default: false (log everything for complete visibility)
+# Note: Set to true on desktop systems to reduce browser thread noise
 ignore_threads = false
 
 # ============================================================================
@@ -186,7 +189,7 @@ resolve_usernames = true
 # Uses LRU cache (1000 entries) to minimize disk I/O
 # Note: Can impact performance for large binaries or high exec rate
 # Recommendation: Enable for security monitoring, disable for high-volume systems
-hash_binaries = false
+hash_binaries = true
 
 # ============================================================================
 # EXAMPLE CONFIGURATIONS
@@ -224,11 +227,34 @@ hash_binaries = false
 #   only_processes = sudo,su,pkexec,doas
 
 # ============================================================================
-# SECURITY MONITORING (MITRE ATT&CK Detection)
+# SECURITY MONITORING - RECOMMENDED (Low noise, high value)
 # ============================================================================
-# These options enable detection of specific attack techniques.
-# All are disabled by default to minimize noise. Enable based on your
-# security requirements and threat model.
+# These detections have very low false positive rates and catch critical
+# attack techniques. ENABLED BY DEFAULT - recommended for all systems.
+
+# Monitor credential file reads - T1003.008 Credential Dumping detection
+# Logs: security_cred_read events
+# Detects: Reads of /etc/shadow, /etc/gshadow by non-whitelisted processes
+# Use case: Detect password hash theft for offline cracking
+# Smart filtering: Whitelists legitimate processes (login, sshd, su, sudo,
+#                  passwd, useradd, sssd, nscd, polkitd, gdm, etc.)
+# Only logs SUSPICIOUS reads - legitimate auth processes are ignored
+# Default: true (RECOMMENDED - very low noise, catches credential theft)
+monitor_cred_read = true
+
+# Monitor /etc/ld.so.preload writes - T1574.006 LD_PRELOAD Hijacking detection
+# Logs: security_ldpreload events
+# Detects: Writes to /etc/ld.so.preload (library injection)
+# Use case: Detect LD_PRELOAD rootkits that inject into every process
+# Note: /etc/ld.so.preload is rarely written legitimately
+# Default: true (RECOMMENDED - almost zero noise, critical rootkit detection)
+monitor_ldpreload = true
+
+# ============================================================================
+# SECURITY MONITORING - OPTIONAL (May generate noise, enable as needed)
+# ============================================================================
+# These detections can have false positives from legitimate tools.
+# DISABLED BY DEFAULT - enable based on your threat model and environment.
 
 # Monitor ptrace() syscall - T1055 Process Injection detection
 # Logs: security_ptrace events
