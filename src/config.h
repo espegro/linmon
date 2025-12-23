@@ -37,6 +37,9 @@ struct linmon_config {
     // Enrichment options
     bool resolve_usernames;   // Resolve UID to username
     bool hash_binaries;       // Calculate SHA256 of executables
+    bool verify_packages;     // Check if binaries belong to system packages
+    char *pkg_cache_file;     // Path to package cache file (default: /var/cache/linmon/packages.cache)
+    int pkg_cache_size;       // Max entries in package cache (default: 10000)
 
     // Process filtering
     char *ignore_processes;   // Comma-separated blacklist

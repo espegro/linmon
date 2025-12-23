@@ -91,15 +91,16 @@ install: $(BUILD_DIR)/$(DAEMON)
 		install -D -m 600 linmon.conf /etc/linmon/linmon.conf; \
 	fi
 	mkdir -p /var/log/linmon
+	mkdir -p /var/cache/linmon
 	@if getent group nogroup >/dev/null 2>&1; then \
-		chown nobody:nogroup /var/log/linmon; \
+		chown nobody:nogroup /var/log/linmon /var/cache/linmon; \
 		sed 's/nobody nogroup/nobody nogroup/' $(DAEMON).logrotate > /etc/logrotate.d/$(DAEMON); \
 	else \
-		chown nobody:nobody /var/log/linmon; \
+		chown nobody:nobody /var/log/linmon /var/cache/linmon; \
 		sed 's/nobody nogroup/nobody nobody/' $(DAEMON).logrotate > /etc/logrotate.d/$(DAEMON); \
 	fi
 	chmod 0644 /etc/logrotate.d/$(DAEMON)
-	chmod 0750 /var/log/linmon
+	chmod 0750 /var/log/linmon /var/cache/linmon
 	systemctl daemon-reload
 
 uninstall:

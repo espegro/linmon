@@ -191,6 +191,24 @@ resolve_usernames = true
 # Recommendation: Enable for security monitoring, disable for high-volume systems
 hash_binaries = true
 
+# Verify if executed binaries belong to system packages
+# Adds "package" field (package name or null) to process_exec events
+# Adds "pkg_modified" field if file was modified since package install
+# Uses persistent disk cache to minimize dpkg/rpm calls
+# Supported: Debian/Ubuntu (dpkg), RHEL/Rocky/Fedora (rpm)
+# Note: First lookup for a binary is slow (~10-50ms), subsequent lookups are fast
+# Default: false (disabled due to initial lookup overhead)
+verify_packages = false
+
+# Package cache file path (used when verify_packages = true)
+# Default: /var/cache/linmon/packages.cache
+# pkg_cache_file = /var/cache/linmon/packages.cache
+
+# Maximum entries in package cache (used when verify_packages = true)
+# Range: 100-1000000
+# Default: 10000
+# pkg_cache_size = 10000
+
 # ============================================================================
 # EXAMPLE CONFIGURATIONS
 # ============================================================================

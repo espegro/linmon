@@ -61,9 +61,15 @@ LinMon logs the following event types:
   "comm": "bash",
   "filename": "/usr/bin/bash",
   "cmdline": "/bin/bash -c ls",
-  "sha256": "abc123..."
+  "sha256": "abc123...",
+  "package": "bash",
+  "pkg_modified": false
 }
 ```
+
+**Package Verification Fields** (requires `verify_packages = true`):
+- `package` - Package name if binary belongs to system package (dpkg/rpm), or `null` if not from a package
+- `pkg_modified` - Only present and `true` if file was modified since package installation
 
 ### Network Events
 - `net_connect_tcp` - Outbound TCP connection
@@ -230,6 +236,26 @@ grep '"type":"process_exec"' /var/log/linmon/events.json | \
 grep '"type":"process_exec"' /var/log/linmon/events.json | \
   jq -r 'select(.sha256) | [.filename, .sha256] | @tsv' | \
   grep -v -F -f known_binaries.txt
+```
+
+#### Untrusted/Unpackaged Binary Detection
+```bash
+# Find binaries NOT from system packages (requires verify_packages = true)
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq 'select(.package == null)'
+
+# List all unpackaged binaries by path
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq -r 'select(.package == null) | .filename' | sort -u
+
+# Detect modified package files (potential tampering)
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq 'select(.pkg_modified == true)'
+
+# Summary: trusted vs untrusted binaries
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq -r 'if .package then "packaged" else "unpackaged" end' | \
+  sort | uniq -c
 ```
 
 #### Credential File Access Detection

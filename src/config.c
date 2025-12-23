@@ -35,6 +35,9 @@ static void set_defaults(struct linmon_config *config)
     config->redact_sensitive = true;
     config->resolve_usernames = true;  // Default: resolve UIDs
     config->hash_binaries = true;      // Default: hash for security monitoring
+    config->verify_packages = false;   // Default: off (requires dpkg/rpm)
+    config->pkg_cache_file = NULL;     // Use default path
+    config->pkg_cache_size = 10000;    // Default: 10k entries
     config->ignore_processes = NULL;
     config->only_processes = NULL;
     config->ignore_networks = NULL;
@@ -192,6 +195,32 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->resolve_usernames = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "hash_binaries") == 0) {
             config->hash_binaries = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "verify_packages") == 0) {
+            config->verify_packages = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "pkg_cache_file") == 0) {
+            // Validate cache file path
+            if (value[0] != '/') {
+                fprintf(stderr, "Security: pkg_cache_file must be absolute path: %s\n", value);
+                continue;
+            }
+            if (strstr(value, "..") != NULL) {
+                fprintf(stderr, "Security: pkg_cache_file cannot contain '..': %s\n", value);
+                continue;
+            }
+            config->pkg_cache_file = strdup(value);
+            if (!config->pkg_cache_file) {
+                fprintf(stderr, "Error: Failed to allocate memory for pkg_cache_file\n");
+                fclose(fp);
+                return -ENOMEM;
+            }
+        } else if (strcmp(key, "pkg_cache_size") == 0) {
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 100 || val > 1000000) {
+                fprintf(stderr, "Invalid pkg_cache_size (100-1000000): %s\n", value);
+                continue;
+            }
+            config->pkg_cache_size = (int)val;
         } else if (strcmp(key, "ignore_processes") == 0) {
             if (strlen(value) > 0) {
                 config->ignore_processes = strdup(value);
@@ -275,5 +304,9 @@ void free_config(struct linmon_config *config)
     if (config->ignore_file_paths) {
         free(config->ignore_file_paths);
         config->ignore_file_paths = NULL;
+    }
+    if (config->pkg_cache_file) {
+        free(config->pkg_cache_file);
+        config->pkg_cache_file = NULL;
     }
 }

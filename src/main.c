@@ -18,6 +18,7 @@
 #include "filter.h"
 #include "userdb.h"
 #include "filehash.h"
+#include "pkgcache.h"
 #include "procfs.h"
 #include "linmon.skel.h"
 #include "../bpf/common.h"
@@ -686,7 +687,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.9\n");
+            printf("LinMon version 1.0.10\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -731,9 +732,16 @@ int main(int argc, char **argv)
     userdb_init();
     filehash_init();
 
+    // Initialize package cache if enabled
+    if (global_config.verify_packages) {
+        pkgcache_init(global_config.pkg_cache_file,
+                      global_config.pkg_cache_size);
+    }
+
     // Configure logger enrichment options
     logger_set_enrichment(global_config.resolve_usernames,
-                         global_config.hash_binaries);
+                         global_config.hash_binaries,
+                         global_config.verify_packages);
 
     // Configure built-in log rotation
     const char *log_path = global_config.log_file ? global_config.log_file :
@@ -901,7 +909,8 @@ int main(int argc, char **argv)
 
             // Update logger enrichment options
             logger_set_enrichment(global_config.resolve_usernames,
-                                 global_config.hash_binaries);
+                                 global_config.hash_binaries,
+                                 global_config.verify_packages);
 
             printf("Configuration reloaded:\n");
             printf("  UID range: %u-%u\n", global_config.min_uid, global_config.max_uid);
@@ -935,6 +944,7 @@ cleanup:
     logger_cleanup();
     userdb_cleanup();
     filehash_cleanup();
+    pkgcache_cleanup();
     free_config(&global_config);
 
     return err < 0 ? -err : 0;

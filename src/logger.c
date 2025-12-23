@@ -15,11 +15,13 @@
 #include "logger.h"
 #include "userdb.h"
 #include "filehash.h"
+#include "pkgcache.h"
 
 static FILE *log_fp = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool enable_resolve_usernames = false;
 static bool enable_hash_binaries = false;
+static bool enable_verify_packages = false;
 static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
 
@@ -44,10 +46,12 @@ int logger_init(const char *log_file)
     return 0;
 }
 
-void logger_set_enrichment(bool resolve_usernames, bool hash_binaries)
+void logger_set_enrichment(bool resolve_usernames, bool hash_binaries,
+                           bool verify_packages)
 {
     enable_resolve_usernames = resolve_usernames;
     enable_hash_binaries = hash_binaries;
+    enable_verify_packages = verify_packages;
 }
 
 void logger_set_rotation(const char *log_file, bool enabled,
@@ -341,6 +345,23 @@ int logger_log_process_event(const struct process_event *event)
         if (enable_hash_binaries && event->type == EVENT_PROCESS_EXEC) {
             if (filehash_calculate(event->filename, sha256, sizeof(sha256))) {
                 fprintf(log_fp, ",\"sha256\":\"%s\"", sha256);
+            }
+        }
+
+        // Verify package ownership if enabled and this is an exec event
+        if (enable_verify_packages && event->type == EVENT_PROCESS_EXEC) {
+            struct pkg_info pkg;
+            if (pkgcache_lookup(event->filename, &pkg) == 0) {
+                if (pkg.from_package && pkg.package[0]) {
+                    char pkg_escaped[PKG_NAME_MAX * 6];
+                    json_escape(pkg.package, pkg_escaped, sizeof(pkg_escaped));
+                    fprintf(log_fp, ",\"package\":\"%s\"", pkg_escaped);
+                } else {
+                    fprintf(log_fp, ",\"package\":null");
+                }
+                if (pkg.modified) {
+                    fprintf(log_fp, ",\"pkg_modified\":true");
+                }
             }
         }
     }

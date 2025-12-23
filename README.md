@@ -22,6 +22,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 ### Security & Privacy
 - **Sensitive Data Redaction**: Automatically redact passwords, tokens, API keys from command lines
 - **Binary Hashing**: Optional SHA256 hashing of executed binaries for integrity monitoring
+- **Package Verification**: Check if binaries belong to system packages (dpkg/rpm) with persistent cache
 - **Privilege Dropping**: Daemon runs as `nobody` (UID 65534) after BPF load, zero capabilities
 - **Hardened systemd**: Full security hardening with seccomp, ProtectSystem, PrivateTmp
 - **Config Validation**: Path traversal protection, permission checks, integer overflow prevention
@@ -31,6 +32,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **Low Overhead**: Efficient kernel-space filtering minimizes performance impact
 - **Username Resolution**: Cached UID→username lookups (256 entry cache)
 - **File Hash Caching**: LRU cache (1000 entries) for binary hashes
+- **Package Cache**: Persistent disk cache (10k entries) for package lookups
 - **Log Rotation**: Built-in rotation (100MB, 10 files) or external logrotate support
 - **Config Reload**: SIGHUP support for live config updates without restart
 
@@ -207,6 +209,8 @@ Key configuration options:
 - `max_uid=0` - Maximum UID to log (0 = no limit)
 - `capture_cmdline=true` - Capture full command-line arguments
 - `redact_sensitive=true` - Redact passwords/tokens from command lines
+- `hash_binaries=true` - Add SHA256 hash of executed binaries
+- `verify_packages=false` - Check if binaries belong to system packages (dpkg/rpm)
 - `ignore_processes=` - Comma-separated blacklist (e.g., `systemd,cron`)
 - `only_processes=` - Comma-separated whitelist (empty = log all)
 - `log_rotate=true` - Built-in log rotation (disable for external logrotate)
@@ -233,6 +237,8 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
   "tty": "pts/0",
   "comm": "git",
   "filename": "/usr/bin/git",
+  "sha256": "abc123...",
+  "package": "git",
   "cmdline": "git status"
 }
 ```
