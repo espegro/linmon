@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <syslog.h>
 
 #include "logger.h"
 #include "userdb.h"
@@ -22,6 +23,7 @@ static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool enable_resolve_usernames = false;
 static bool enable_hash_binaries = false;
 static bool enable_verify_packages = false;
+static bool enable_syslog = false;  // Log all events to syslog (in addition to JSON)
 static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
 static char hostname[256] = {0};  // Cached hostname for multi-host SIEM deployments
@@ -76,6 +78,11 @@ void logger_set_rotation(const char *log_file, bool enabled,
     rotation_max_size = max_size;
     rotation_max_files = max_files;
     bytes_written = 0;
+}
+
+void logger_set_syslog(bool enabled)
+{
+    enable_syslog = enabled;
 }
 
 // Perform log rotation: events.json -> events.json.1 -> events.json.2 -> ...
@@ -395,6 +402,18 @@ int logger_log_process_event(const struct process_event *event)
     if (!check_fprintf_result(ret))
         return -EIO;
 
+    // Log to syslog if enabled
+    if (enable_syslog) {
+        if (event->cmdline[0]) {
+            syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s cmdline=\"%s\"",
+                   event_type, event->pid, event->uid, event->comm,
+                   cmdline_escaped);
+        } else {
+            syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s",
+                   event_type, event->pid, event->uid, event->comm);
+        }
+    }
+
     return 0;
 }
 
@@ -456,6 +475,13 @@ int logger_log_file_event(const struct file_event *event)
 
     if (!check_fprintf_result(ret))
         return -EIO;
+
+    // Log to syslog if enabled
+    if (enable_syslog) {
+        syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s filename=\"%s\"",
+               event_type, event->pid, event->uid, event->comm,
+               filename_escaped);
+    }
 
     return 0;
 }
@@ -536,6 +562,13 @@ int logger_log_network_event(const struct network_event *event)
     if (!check_fprintf_result(ret))
         return -EIO;
 
+    // Log to syslog if enabled
+    if (enable_syslog) {
+        syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s %s:%u -> %s:%u",
+               event_type, event->pid, event->uid, event->comm,
+               saddr_str, event->sport, daddr_str, event->dport);
+    }
+
     return 0;
 }
 
@@ -614,6 +647,19 @@ int logger_log_privilege_event(const struct privilege_event *event)
 
     if (!check_fprintf_result(ret))
         return -EIO;
+
+    // Log to syslog if enabled
+    if (enable_syslog) {
+        if (event->target_comm[0]) {
+            syslog(LOG_WARNING, "%s: pid=%u uid=%u->%u comm=%s target=\"%s\"",
+                   event_type, event->pid, event->old_uid, event->new_uid,
+                   event->comm, target_escaped);
+        } else {
+            syslog(LOG_WARNING, "%s: pid=%u uid=%u->%u comm=%s",
+                   event_type, event->pid, event->old_uid, event->new_uid,
+                   event->comm);
+        }
+    }
 
     return 0;
 }
@@ -741,6 +787,12 @@ int logger_log_security_event(const struct security_event *event)
 
     if (!check_fprintf_result(ret))
         return -EIO;
+
+    // Log to syslog if enabled (security events use LOG_WARNING)
+    if (enable_syslog) {
+        syslog(LOG_WARNING, "%s: pid=%u uid=%u comm=%s",
+               event_type, event->pid, event->uid, event->comm);
+    }
 
     return 0;
 }

@@ -26,6 +26,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **Privilege Dropping**: Daemon runs as `nobody` (UID 65534) after BPF load, zero capabilities
 - **Hardened systemd**: Full security hardening with seccomp, ProtectSystem, PrivateTmp
 - **Config Validation**: Path traversal protection, permission checks, integer overflow prevention
+- **Tamper Detection**: Daemon lifecycle events logged to syslog/journald with signal sender info
 
 ### Performance & Reliability
 - **eBPF/CO-RE**: Compile once, run everywhere (kernel >= 5.8)
@@ -92,6 +93,7 @@ Key configuration options:
 - `log_rotate=true` - Built-in log rotation (disable for external logrotate)
 - `log_rotate_size=100M` - Max file size before rotation (K/M/G suffixes)
 - `log_rotate_count=10` - Number of rotated files to keep
+- `log_to_syslog=false` - Also log all events to syslog/journald (for SIEM integration)
 
 ## Logs
 
@@ -216,6 +218,19 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 }
 ```
 
+#### Daemon Shutdown (Tamper Detection)
+```json
+{
+  "timestamp": "2024-12-22T14:30:22.123Z",
+  "type": "daemon_shutdown",
+  "signal": "SIGTERM",
+  "signal_num": 15,
+  "sender_pid": 1234,
+  "sender_uid": 0,
+  "message": "LinMon terminated by signal"
+}
+```
+
 ### Key Fields
 
 | Field | Description |
@@ -260,6 +275,11 @@ jq 'select(.sid == 1000)' /var/log/linmon/events.json
 - `security_unshare` - T1611 Container Escape
 - `security_execveat` - T1620 Fileless Execution
 - `security_bpf` - T1014 eBPF Rootkit
+
+**Daemon Lifecycle (Tamper Detection):**
+- `daemon_start` - LinMon monitoring started
+- `daemon_reload` - Configuration reload (SIGHUP) with sender PID/UID
+- `daemon_shutdown` - Daemon terminated with signal and sender PID/UID
 
 **Log Rotation**: LinMon includes built-in log rotation that is **on by default**:
 - Rotates when file reaches 100MB (configurable via `log_rotate_size`)
@@ -340,6 +360,53 @@ sudo journalctl -u linmond -n 50
 # Verify events are being logged
 tail -5 /var/log/linmon/events.json
 ```
+
+### Tamper Detection (Syslog/Journal)
+
+LinMon logs daemon lifecycle events to both JSON log and syslog/journald. This provides tamper detection - even if an attacker deletes the JSON log, the journal entries remain.
+
+```bash
+# View daemon lifecycle events
+sudo journalctl -t linmond --since "1 hour ago"
+
+# Example output:
+# linmond[1234]: daemon_start: LinMon v1.0.15 monitoring started
+# linmond[1234]: daemon_reload: signal=1 sender_pid=5678 sender_uid=0 - Configuration reload requested
+# linmond[1234]: daemon_shutdown: signal=15 sender_pid=9012 sender_uid=0 - LinMon terminated by signal
+
+# Check who stopped LinMon (signal sender info)
+sudo journalctl -t linmond | grep daemon_shutdown
+```
+
+Daemon events include:
+- **Signal number**: SIGTERM (15), SIGINT (2), SIGHUP (1)
+- **Sender PID**: Which process sent the signal
+- **Sender UID**: Which user sent the signal (0 = root)
+
+For enhanced security, configure remote syslog forwarding so journal entries are stored off-host.
+
+### Full Syslog Integration
+
+To log **all** events to syslog (in addition to the JSON file), enable `log_to_syslog`:
+
+```bash
+# Edit config
+sudo vi /etc/linmon/linmon.conf
+# Set: log_to_syslog = true
+
+# Reload config
+sudo systemctl reload linmond
+
+# View all events in journald
+sudo journalctl -t linmond -f
+```
+
+When enabled, all events (process, network, file, privilege, security) are logged to syslog with priority INFO or WARNING. This is useful for:
+- **Central log management**: Forward to remote syslog server
+- **SIEM integration**: Ingest events into Splunk, Elasticsearch, etc.
+- **Audit compliance**: Meet regulatory requirements for log retention
+
+**Note**: This can generate significant syslog volume on busy systems.
 
 ### Reload Configuration
 ```bash

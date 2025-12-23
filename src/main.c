@@ -748,7 +748,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.14\n");
+            printf("LinMon version 1.0.15\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -813,6 +813,9 @@ int main(int argc, char **argv)
                          global_config.hash_binaries,
                          global_config.verify_packages);
 
+    // Configure syslog output for all events
+    logger_set_syslog(global_config.log_to_syslog);
+
     // Configure built-in log rotation
     const char *log_path = global_config.log_file ? global_config.log_file :
                            "/var/log/linmon/events.json";
@@ -832,6 +835,7 @@ int main(int argc, char **argv)
     printf("  Redact sensitive: %s\n", global_config.redact_sensitive ? "yes" : "no");
     printf("  Resolve usernames: %s\n", global_config.resolve_usernames ? "yes" : "no");
     printf("  Hash binaries: %s\n", global_config.hash_binaries ? "yes" : "no");
+    printf("  Syslog output: %s\n", global_config.log_to_syslog ? "yes (all events)" : "no (daemon events only)");
     if (global_config.log_rotate) {
         printf("  Log rotation: enabled (%luMB, keep %d files)\n",
                global_config.log_rotate_size / (1024 * 1024),
@@ -929,7 +933,7 @@ int main(int argc, char **argv)
            global_config.log_file ? global_config.log_file : "/var/log/linmon/events.json");
 
     // Log daemon startup (tamper detection - visible in syslog/journal)
-    log_daemon_event("daemon_start", "LinMon v1.0.14 monitoring started", 0, 0, 0);
+    log_daemon_event("daemon_start", "LinMon v1.0.15 monitoring started", 0, 0, 0);
 
     // Main event loop - poll for events
     while (!exiting) {
@@ -988,12 +992,16 @@ int main(int argc, char **argv)
                                  global_config.hash_binaries,
                                  global_config.verify_packages);
 
+            // Update syslog setting
+            logger_set_syslog(global_config.log_to_syslog);
+
             printf("Configuration reloaded:\n");
             printf("  UID range: %u-%u\n", global_config.min_uid, global_config.max_uid);
             printf("  Require TTY: %s\n", global_config.require_tty ? "yes" : "no");
             printf("  Redact sensitive: %s\n", global_config.redact_sensitive ? "yes" : "no");
             printf("  Resolve usernames: %s\n", global_config.resolve_usernames ? "yes" : "no");
             printf("  Hash binaries: %s\n", global_config.hash_binaries ? "yes" : "no");
+            printf("  Syslog output: %s\n", global_config.log_to_syslog ? "yes" : "no");
             printf("  Log file reopened (logrotate support)\n");
 
             reload_config = false;

@@ -23,6 +23,10 @@ void logger_set_enrichment(bool resolve_usernames, bool hash_binaries,
 void logger_set_rotation(const char *log_file, bool enabled,
                          unsigned long max_size, int max_files);
 
+// Enable or disable syslog output for all events
+// When enabled, all events are logged to syslog in addition to JSON file
+void logger_set_syslog(bool enabled);
+
 // Replace logger file pointer atomically (for config reload)
 void logger_replace(FILE *new_fp);
 
