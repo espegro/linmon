@@ -8,8 +8,11 @@
 #include <sys/types.h>
 #include <time.h>
 
-// Maximum path length for cache entries
-#define PKG_PATH_MAX 256
+// Maximum path length for cache entries (use system PATH_MAX)
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+#define PKG_PATH_MAX PATH_MAX
 // Maximum package name length
 #define PKG_NAME_MAX 64
 // Default cache file path

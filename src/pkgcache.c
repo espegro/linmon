@@ -113,6 +113,7 @@ static int query_package_manager(const char *path, char *buf, size_t buflen)
     char cmd[PKG_PATH_MAX * 4 + 64];
     char line[256];
     int ret = -1;
+    int pclose_status;
 
     buf[0] = '\0';
 
@@ -184,7 +185,13 @@ static int query_package_manager(const char *path, char *buf, size_t buflen)
         }
     }
 
-    pclose(fp);
+    pclose_status = pclose(fp);
+    if (pclose_status == -1) {
+        // pclose() failed - don't cache this result
+        return -errno;
+    }
+    // WIFEXITED/WEXITSTATUS could be checked here, but dpkg/rpm
+    // return non-zero for "not found", which is a valid result
     return ret;
 }
 
@@ -374,6 +381,15 @@ int pkgcache_save(void)
     fp = fopen(tmp_path, "w");
     if (!fp)
         return -errno;
+
+    // Set restrictive permissions on cache file (0600 = rw-------)
+    // This prevents information leakage of system paths
+    if (fchmod(fileno(fp), 0600) != 0) {
+        int saved_errno = errno;
+        fclose(fp);
+        unlink(tmp_path);
+        return -saved_errno;
+    }
 
     // Write header
     fprintf(fp, "# LinMon package cache v1\n");
