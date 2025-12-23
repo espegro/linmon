@@ -103,6 +103,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:15.123Z",
+  "hostname": "webserver01",
   "type": "process_exec",
   "pid": 12345,
   "ppid": 1000,
@@ -123,6 +124,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:16.456Z",
+  "hostname": "webserver01",
   "type": "process_exec",
   "pid": 5678,
   "ppid": 1,
@@ -140,6 +142,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:17.789Z",
+  "hostname": "webserver01",
   "type": "net_connect_tcp",
   "pid": 12346,
   "uid": 1000,
@@ -158,6 +161,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:18.012Z",
+  "hostname": "webserver01",
   "type": "priv_sudo",
   "pid": 12347,
   "old_uid": 1000,
@@ -171,6 +175,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:19.345Z",
+  "hostname": "webserver01",
   "type": "security_bind",
   "pid": 9999,
   "uid": 1000,
@@ -186,6 +191,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:20.678Z",
+  "hostname": "webserver01",
   "type": "security_unshare",
   "pid": 8888,
   "uid": 1000,
@@ -199,6 +205,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 ```json
 {
   "timestamp": "2024-12-22T14:30:21.901Z",
+  "hostname": "webserver01",
   "type": "security_memfd_create",
   "pid": 7777,
   "uid": 1000,
@@ -213,6 +220,9 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 
 | Field | Description |
 |-------|-------------|
+| `timestamp` | ISO 8601 timestamp with millisecond precision (UTC) |
+| `hostname` | Hostname of the system that generated the event (for multi-host SIEM) |
+| `type` | Event type (e.g., `process_exec`, `net_connect_tcp`, `security_ptrace`) |
 | `sid` | Session ID - groups all processes from same login session |
 | `pgid` | Process Group ID - for job control (pipes, etc.) |
 | `tty` | Terminal name (e.g., "pts/0") - empty for background processes |
@@ -283,16 +293,36 @@ grep '"type":"net_connect_tcp"' /var/log/linmon/events.json | \
 
 ### Integration with Monitoring Systems
 
-LinMon integrates with:
-- **ELK Stack**: Use Filebeat to ship JSON logs to Elasticsearch
-- **Splunk**: Configure as JSON sourcetype for security monitoring
-- **Grafana**: Use mtail or similar to export metrics from logs
-- **Custom**: Parse JSON with `jq`, `python`, or your preferred tool
+LinMon integrates with SIEM and log aggregation platforms for multi-host deployments. All events include a `hostname` field for aggregating logs across multiple systems.
+
+**Ready-to-use integrations** (see `extras/` directory):
+- **Vector.dev + ClickHouse** (recommended): High-performance data pipeline with columnar OLAP storage
+- **Filebeat + Elasticsearch**: ELK stack integration for full-text search and visualization
+- **Vector.dev + Elasticsearch**: High-performance alternative to Filebeat
+- **Splunk HEC**: Commercial SIEM integration (coming soon)
+
+**Quick Start - Vector.dev + ClickHouse**:
+```bash
+# Install Vector and ClickHouse
+curl -sSfL https://sh.vector.dev | bash -s -- -y
+sudo apt-get install clickhouse-server clickhouse-client
+
+# Create database schema
+clickhouse-client < extras/clickhouse/schema.sql
+
+# Start Vector pipeline
+vector --config extras/vector/vector.toml
+```
+
+See **[extras/README.md](extras/README.md)** for:
+- Complete integration setup guides
+- ClickHouse schema and example queries
+- Vector.dev and Filebeat configurations
+- Performance comparison of different stacks
 
 See **[MONITORING.md](MONITORING.md)** for:
 - Complete query examples
 - Security detection patterns
-- Integration guides (ELK, Splunk, Grafana)
 - Alerting examples (email, Slack, systemd)
 - Performance monitoring
 - Troubleshooting guide

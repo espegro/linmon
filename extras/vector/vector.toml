@@ -1,0 +1,203 @@
+# Vector.dev configuration for LinMon
+# https://vector.dev/docs/
+#
+# This configuration reads LinMon JSON events and can forward them to:
+# - ClickHouse (OLAP database for analytics)
+# - Elasticsearch (for ELK stack)
+# - Splunk (commercial SIEM)
+# - S3 (for archival)
+#
+# Installation:
+#   Ubuntu: curl -sSfL https://sh.vector.dev | bash -s -- -y
+#   RHEL:   curl -sSfL https://sh.vector.dev | bash -s -- -y
+#
+# Usage:
+#   vector --config extras/vector/vector.toml
+
+# ==============================================================================
+# DATA DIRECTORY
+# ==============================================================================
+
+data_dir = "/var/lib/vector"
+
+# ==============================================================================
+# SOURCE: Read LinMon JSON logs
+# ==============================================================================
+
+[sources.linmon_logs]
+type = "file"
+include = ["/var/log/linmon/events.json"]
+read_from = "end"  # Only read new events (use "beginning" to reprocess all)
+fingerprint.strategy = "device_and_inode"
+
+# ==============================================================================
+# TRANSFORM: Parse JSON and add metadata
+# ==============================================================================
+
+[transforms.parse_json]
+type = "remap"
+inputs = ["linmon_logs"]
+source = '''
+# Parse JSON event
+. = parse_json!(.message)
+
+# Add ingestion timestamp
+.ingest_timestamp = now()
+
+# Ensure hostname is present (fallback if missing)
+if !exists(.hostname) {
+  .hostname = get_hostname!()
+}
+
+# Parse timestamp to datetime (ISO 8601)
+.timestamp = parse_timestamp!(.timestamp, format: "%Y-%m-%dT%H:%M:%S%.fZ")
+
+# Add event classification
+.event_category = if starts_with(.type, "process_") {
+  "process"
+} else if starts_with(.type, "file_") {
+  "file"
+} else if starts_with(.type, "net_") {
+  "network"
+} else if starts_with(.type, "priv_") {
+  "privilege"
+} else if starts_with(.type, "security_") {
+  "security"
+} else {
+  "other"
+}
+
+# Add MITRE ATT&CK technique tags (if applicable)
+.mitre_technique = if .type == "security_ptrace" {
+  "T1055"
+} else if .type == "security_module_load" {
+  "T1547.006"
+} else if .type == "security_memfd_create" {
+  "T1620"
+} else if .type == "security_bind" {
+  "T1571"
+} else if .type == "security_unshare" {
+  "T1611"
+} else if .type == "security_execveat" {
+  "T1620"
+} else if .type == "security_bpf" {
+  "T1014"
+} else if .type == "security_cred_read" {
+  "T1003.008"
+} else if .type == "security_ldpreload" {
+  "T1574.006"
+} else {
+  null
+}
+'''
+
+# ==============================================================================
+# SINK: ClickHouse (OLAP Database)
+# ==============================================================================
+# ClickHouse is ideal for analytics on large volumes of security events.
+# See extras/clickhouse/schema.sql for table schema.
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["parse_json"]
+endpoint = "http://localhost:8123"
+database = "linmon"
+table = "events"
+compression = "gzip"
+skip_unknown_fields = true
+
+# Authentication (uncomment if needed)
+# auth.strategy = "basic"
+# auth.user = "default"
+# auth.password = "${CLICKHOUSE_PASSWORD}"
+
+# Buffer settings (tune based on event volume)
+buffer.type = "memory"
+buffer.max_events = 10000
+buffer.timeout_secs = 1
+
+# Batch settings (optimize for ClickHouse inserts)
+batch.max_bytes = 10485760  # 10MB
+batch.max_events = 10000
+batch.timeout_secs = 5
+
+# ==============================================================================
+# SINK: Elasticsearch (ELK Stack)
+# ==============================================================================
+# Uncomment to send events to Elasticsearch for ELK stack integration.
+
+# [sinks.elasticsearch]
+# type = "elasticsearch"
+# inputs = ["parse_json"]
+# endpoints = ["http://localhost:9200"]
+# mode = "data_stream"
+# data_stream.type = "logs"
+# data_stream.dataset = "linmon"
+# data_stream.namespace = "default"
+#
+# # Authentication
+# auth.strategy = "basic"
+# auth.user = "elastic"
+# auth.password = "${ELASTICSEARCH_PASSWORD}"
+#
+# # Buffer and batch settings
+# buffer.max_events = 1000
+# batch.max_bytes = 10485760
+# batch.timeout_secs = 5
+
+# ==============================================================================
+# SINK: Splunk HEC (HTTP Event Collector)
+# ==============================================================================
+# Uncomment to send events to Splunk for commercial SIEM integration.
+
+# [sinks.splunk]
+# type = "splunk_hec_logs"
+# inputs = ["parse_json"]
+# endpoint = "https://splunk.example.com:8088"
+# default_token = "${SPLUNK_HEC_TOKEN}"
+# compression = "gzip"
+#
+# # Splunk metadata
+# sourcetype = "linmon:json"
+# source = "linmon"
+# index = "security"
+#
+# # Buffer and batch settings
+# buffer.max_events = 1000
+# batch.max_bytes = 1048576
+# batch.timeout_secs = 5
+
+# ==============================================================================
+# SINK: S3 (Archival / Long-term Storage)
+# ==============================================================================
+# Uncomment to archive events to S3 for compliance and long-term retention.
+
+# [sinks.s3]
+# type = "aws_s3"
+# inputs = ["parse_json"]
+# bucket = "linmon-events"
+# region = "us-east-1"
+# compression = "gzip"
+# encoding.codec = "ndjson"  # Newline-delimited JSON
+#
+# # Partition by date and hostname
+# key_prefix = "year=%Y/month=%m/day=%d/hostname={{ hostname }}/"
+# filename_time_format = "%Y%m%d_%H%M%S"
+#
+# # Authentication (use IAM role or credentials)
+# # auth.access_key_id = "${AWS_ACCESS_KEY_ID}"
+# # auth.secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
+#
+# # Buffer and batch settings
+# batch.max_bytes = 10485760
+# batch.timeout_secs = 300  # 5 minutes
+
+# ==============================================================================
+# SINK: Console (for testing/debugging)
+# ==============================================================================
+# Uncomment to print events to console for debugging.
+
+# [sinks.console]
+# type = "console"
+# inputs = ["parse_json"]
+# encoding.codec = "json"

@@ -1,0 +1,252 @@
+# Filebeat configuration for LinMon
+# https://www.elastic.co/guide/en/beats/filebeat/current/index.html
+#
+# This configuration reads LinMon JSON events and forwards them to:
+# - Elasticsearch (for indexing and search)
+# - Logstash (for additional processing)
+# - Kafka (for stream processing)
+#
+# Installation:
+#   Ubuntu: sudo apt-get install filebeat
+#   RHEL:   sudo yum install filebeat
+#
+# Usage:
+#   sudo cp extras/filebeat/filebeat.yml /etc/filebeat/filebeat.yml
+#   sudo systemctl restart filebeat
+
+# ==============================================================================
+# Filebeat Inputs
+# ==============================================================================
+
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/linmon/events.json
+      - /var/log/linmon/events.json.*  # Include rotated logs
+
+    # Parse as JSON
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.message_key: message
+
+    # Fields to add to every event
+    fields:
+      log_type: linmon
+      environment: production  # Change as needed
+
+    # Exclude rotated logs that are too old (optional)
+    # exclude_files: ['\.gz$']
+
+    # Multiline settings (not needed for LinMon - each event is one line)
+    multiline.type: count
+    multiline.count_lines: 1
+
+# ==============================================================================
+# Filebeat Modules (disabled - we use custom input)
+# ==============================================================================
+
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+# ==============================================================================
+# Processors (data enrichment and transformation)
+# ==============================================================================
+
+processors:
+  # Add host metadata
+  - add_host_metadata:
+      when.not.has_fields: ['agent.hostname']
+      netinfo.enabled: true
+
+  # Add cloud metadata (if running in cloud)
+  - add_cloud_metadata: ~
+
+  # Add Docker metadata (if running in containers)
+  - add_docker_metadata: ~
+
+  # Parse timestamp field
+  - timestamp:
+      field: timestamp
+      target_field: '@timestamp'
+      layouts:
+        - '2006-01-02T15:04:05.999Z'
+      ignore_missing: true
+
+  # Add event category based on type field
+  - script:
+      lang: javascript
+      source: >
+        function process(event) {
+          var type = event.Get("type");
+          if (!type) return;
+
+          if (type.startsWith("process_")) {
+            event.Put("event.category", "process");
+          } else if (type.startsWith("file_")) {
+            event.Put("event.category", "file");
+          } else if (type.startsWith("net_")) {
+            event.Put("event.category", "network");
+          } else if (type.startsWith("priv_")) {
+            event.Put("event.category", "authentication");
+          } else if (type.startsWith("security_")) {
+            event.Put("event.category", "intrusion_detection");
+          }
+
+          // Add MITRE ATT&CK technique
+          var mitre_map = {
+            "security_ptrace": "T1055",
+            "security_module_load": "T1547.006",
+            "security_memfd_create": "T1620",
+            "security_bind": "T1571",
+            "security_unshare": "T1611",
+            "security_execveat": "T1620",
+            "security_bpf": "T1014",
+            "security_cred_read": "T1003.008",
+            "security_ldpreload": "T1574.006"
+          };
+
+          if (mitre_map[type]) {
+            event.Put("threat.technique.id", mitre_map[type]);
+          }
+        }
+
+  # Drop empty or null fields
+  - drop_fields:
+      fields: ["agent.ephemeral_id", "agent.id", "ecs.version", "input.type", "log.offset"]
+      ignore_missing: true
+
+# ==============================================================================
+# Output: Elasticsearch
+# ==============================================================================
+
+output.elasticsearch:
+  enabled: true
+  hosts: ["localhost:9200"]
+
+  # Index pattern (recommended: use data streams)
+  index: "linmon-%{+yyyy.MM.dd}"
+
+  # Or use data streams (Elasticsearch 7.9+)
+  # allow_older_versions: false
+
+  # Authentication
+  username: "elastic"
+  password: "${ELASTICSEARCH_PASSWORD}"
+
+  # SSL/TLS settings
+  # ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
+  # ssl.certificate: "/etc/pki/client/cert.pem"
+  # ssl.key: "/etc/pki/client/cert.key"
+
+  # Pipeline for additional processing (optional)
+  # pipeline: "linmon-pipeline"
+
+  # Bulk settings
+  bulk_max_size: 1000
+  worker: 2
+
+# ==============================================================================
+# Output: Logstash (alternative to Elasticsearch)
+# ==============================================================================
+# Uncomment to send to Logstash instead of Elasticsearch
+
+# output.logstash:
+#   enabled: true
+#   hosts: ["localhost:5044"]
+#
+#   # SSL/TLS settings
+#   # ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
+#   # ssl.certificate: "/etc/pki/client/cert.pem"
+#   # ssl.key: "/etc/pki/client/cert.key"
+#
+#   # Bulk settings
+#   bulk_max_size: 2048
+#   worker: 2
+
+# ==============================================================================
+# Output: Kafka (for stream processing)
+# ==============================================================================
+# Uncomment to send to Kafka
+
+# output.kafka:
+#   enabled: true
+#   hosts: ["localhost:9092"]
+#   topic: "linmon-events"
+#   partition.round_robin:
+#     reachable_only: false
+#   required_acks: 1
+#   compression: gzip
+#   max_message_bytes: 1000000
+
+# ==============================================================================
+# Logging
+# ==============================================================================
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# ==============================================================================
+# Internal Queue Settings
+# ==============================================================================
+
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 1s
+
+# ==============================================================================
+# Monitoring (send Filebeat metrics to Elasticsearch)
+# ==============================================================================
+
+monitoring.enabled: false
+# monitoring.elasticsearch:
+#   hosts: ["localhost:9200"]
+#   username: "elastic"
+#   password: "${ELASTICSEARCH_PASSWORD}"
+
+# ==============================================================================
+# Example Elasticsearch Index Template
+# ==============================================================================
+# Create this template in Elasticsearch for better field mappings:
+#
+# PUT _index_template/linmon
+# {
+#   "index_patterns": ["linmon-*"],
+#   "template": {
+#     "settings": {
+#       "number_of_shards": 1,
+#       "number_of_replicas": 1,
+#       "index.refresh_interval": "5s"
+#     },
+#     "mappings": {
+#       "properties": {
+#         "@timestamp": { "type": "date" },
+#         "timestamp": { "type": "date" },
+#         "hostname": { "type": "keyword" },
+#         "type": { "type": "keyword" },
+#         "event.category": { "type": "keyword" },
+#         "pid": { "type": "long" },
+#         "ppid": { "type": "long" },
+#         "uid": { "type": "long" },
+#         "username": { "type": "keyword" },
+#         "comm": { "type": "keyword" },
+#         "filename": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+#         "cmdline": { "type": "text" },
+#         "sha256": { "type": "keyword" },
+#         "package": { "type": "keyword" },
+#         "saddr": { "type": "ip" },
+#         "daddr": { "type": "ip" },
+#         "sport": { "type": "integer" },
+#         "dport": { "type": "integer" },
+#         "threat.technique.id": { "type": "keyword" }
+#       }
+#     }
+#   }
+# }

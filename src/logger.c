@@ -24,6 +24,7 @@ static bool enable_hash_binaries = false;
 static bool enable_verify_packages = false;
 static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
+static char hostname[256] = {0};  // Cached hostname for multi-host SIEM deployments
 
 // Log rotation settings
 static bool rotation_enabled = false;
@@ -42,6 +43,16 @@ int logger_init(const char *log_file)
 
     // Set line buffering
     setlinebuf(log_fp);
+
+    // Get hostname for multi-host SIEM deployments
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        // Fallback to "unknown" if gethostname fails
+        strncpy(hostname, "unknown", sizeof(hostname) - 1);
+        hostname[sizeof(hostname) - 1] = '\0';
+    } else {
+        // Ensure null termination (POSIX doesn't guarantee it)
+        hostname[sizeof(hostname) - 1] = '\0';
+    }
 
     return 0;
 }
@@ -280,6 +291,7 @@ static void format_timestamp(char *buf, size_t size)
 int logger_log_process_event(const struct process_event *event)
 {
     char timestamp[64];
+    char hostname_escaped[256 * 6];
     char comm_escaped[TASK_COMM_LEN * 6];
     char filename_escaped[MAX_FILENAME_LEN * 6];
     char cmdline_escaped[MAX_CMDLINE_LEN * 6];
@@ -305,6 +317,7 @@ int logger_log_process_event(const struct process_event *event)
     }
 
     json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
 
     // Resolve username if enabled
     if (enable_resolve_usernames) {
@@ -315,10 +328,10 @@ int logger_log_process_event(const struct process_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
             "\"sid\":%u,\"pgid\":%u,"
             "\"uid\":%u",
-            timestamp, event_type, event->pid, event->ppid,
+            timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid,
             event->uid);
 
@@ -388,6 +401,7 @@ int logger_log_process_event(const struct process_event *event)
 int logger_log_file_event(const struct file_event *event)
 {
     char timestamp[64];
+    char hostname_escaped[256 * 6];
     char comm_escaped[TASK_COMM_LEN * 6];
     char filename_escaped[MAX_FILENAME_LEN * 6];
     char username[USERNAME_MAX];
@@ -418,6 +432,7 @@ int logger_log_file_event(const struct file_event *event)
 
     json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
     json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
 
     if (enable_resolve_usernames) {
         userdb_resolve(event->uid, username, sizeof(username));
@@ -427,8 +442,8 @@ int logger_log_file_event(const struct file_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
-            timestamp, event_type, event->pid, event->uid);
+            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
+            timestamp, hostname_escaped, event_type, event->pid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -448,6 +463,7 @@ int logger_log_file_event(const struct file_event *event)
 int logger_log_network_event(const struct network_event *event)
 {
     char timestamp[64];
+    char hostname_escaped[256 * 6];
     char comm_escaped[TASK_COMM_LEN * 6];
     char username[USERNAME_MAX];
     char username_escaped[USERNAME_MAX * 6];
@@ -475,6 +491,7 @@ int logger_log_network_event(const struct network_event *event)
     }
 
     json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
 
     if (enable_resolve_usernames) {
         userdb_resolve(event->uid, username, sizeof(username));
@@ -501,9 +518,9 @@ int logger_log_network_event(const struct network_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
+            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
             "\"uid\":%u",
-            timestamp, event_type, event->pid, event->uid);
+            timestamp, hostname_escaped, event_type, event->pid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -525,6 +542,7 @@ int logger_log_network_event(const struct network_event *event)
 int logger_log_privilege_event(const struct privilege_event *event)
 {
     char timestamp[64];
+    char hostname_escaped[256 * 6];
     char comm_escaped[TASK_COMM_LEN * 6];
     char target_escaped[TASK_COMM_LEN * 6];
     char old_username[USERNAME_MAX];
@@ -553,6 +571,7 @@ int logger_log_privilege_event(const struct privilege_event *event)
     }
 
     json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
 
     if (enable_resolve_usernames) {
         userdb_resolve(event->old_uid, old_username, sizeof(old_username));
@@ -564,9 +583,9 @@ int logger_log_privilege_event(const struct privilege_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
+            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
             "\"old_uid\":%u",
-            timestamp, event_type, event->pid,
+            timestamp, hostname_escaped, event_type, event->pid,
             event->old_uid);
 
     if (enable_resolve_usernames) {
@@ -602,6 +621,7 @@ int logger_log_privilege_event(const struct privilege_event *event)
 int logger_log_security_event(const struct security_event *event)
 {
     char timestamp[64];
+    char hostname_escaped[256 * 6];
     char comm_escaped[TASK_COMM_LEN * 6];
     char filename_escaped[MAX_FILENAME_LEN * 6];
     char username[USERNAME_MAX];
@@ -646,6 +666,7 @@ int logger_log_security_event(const struct security_event *event)
     }
 
     json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
 
     if (enable_resolve_usernames) {
         userdb_resolve(event->uid, username, sizeof(username));
@@ -655,8 +676,8 @@ int logger_log_security_event(const struct security_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
-            timestamp, event_type, event->pid, event->uid);
+            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
+            timestamp, hostname_escaped, event_type, event->pid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
