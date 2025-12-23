@@ -43,6 +43,21 @@ LinMon consists of two main components:
 1. **eBPF Programs** (`bpf/`): Kernel-space programs that attach to various kernel tracepoints and kprobes to capture events
 2. **Userspace Daemon** (`src/`): Service that loads eBPF programs, collects events, and writes structured logs
 
+## Installation
+
+**Quick Start**:
+```bash
+# Install dependencies (Ubuntu)
+sudo apt-get install -y clang llvm libbpf-dev libelf-dev \
+    zlib1g-dev libssl-dev libcap-dev linux-tools-generic
+
+# Build and install
+make
+sudo ./install.sh
+```
+
+For detailed installation instructions including RHEL/Rocky setup, manual installation, and troubleshooting, see **[INSTALL.md](INSTALL.md)**.
+
 ## Requirements
 
 ### System Requirements
@@ -52,147 +67,8 @@ LinMon consists of two main components:
   - RHEL 10: ✅ kernel 6.x+
 
 ### Build Dependencies
-- **eBPF toolchain**:
-  - libbpf >= 0.7
-  - clang >= 11
-  - llvm
-  - kernel headers (for BTF/vmlinux.h)
-- **C compiler**: gcc or clang
-- **Build tools**: make
-- **Libraries**:
-  - libelf (ELF file handling)
-  - zlib (compression)
-  - libssl/libcrypto (SHA256 hashing)
-  - libcap (capability management)
-  - pthread (threading, usually in glibc)
 
-### Ubuntu 24.04 / Debian
-```bash
-# Install all build dependencies
-sudo apt-get update
-sudo apt-get install -y \
-    clang \
-    llvm \
-    gcc \
-    make \
-    linux-tools-generic \
-    libbpf-dev \
-    libelf-dev \
-    zlib1g-dev \
-    libssl-dev \
-    libcap-dev \
-    linux-headers-$(uname -r)
-
-# Note: linux-tools-generic provides bpftool on Ubuntu
-```
-
-### RHEL 9 / RHEL 10 / Rocky Linux / AlmaLinux
-```bash
-# Install all build dependencies
-sudo dnf install -y \
-    clang \
-    llvm \
-    gcc \
-    make \
-    bpftool \
-    libbpf-devel \
-    elfutils-libelf-devel \
-    zlib-devel \
-    openssl-devel \
-    libcap-devel \
-    kernel-devel
-
-# RHEL 9/10 note: You may need to enable CodeReady Builder (CRB) for some packages
-# RHEL 9:
-sudo subscription-manager repos --enable codeready-builder-for-rhel-9-$(arch)-rpms
-# RHEL 10:
-sudo subscription-manager repos --enable codeready-builder-for-rhel-10-$(arch)-rpms
-
-# For Rocky/Alma (no subscription needed):
-sudo dnf config-manager --set-enabled crb  # Rocky 9+
-# or
-sudo dnf config-manager --set-enabled powertools  # Rocky 8
-```
-
-## Building
-
-```bash
-make
-```
-
-This will:
-1. Compile eBPF programs to BPF bytecode
-2. Build the userspace daemon
-3. Create the `linmond` binary
-
-### Build Verification
-
-After installation, verify the build works:
-```bash
-# Check kernel BTF support (required for BPF CO-RE)
-ls -l /sys/kernel/btf/vmlinux
-# Should show a file - if missing, your kernel doesn't have BTF
-
-# Check bpftool availability
-bpftool version
-# Should show bpftool version
-
-# Test the binary
-./build/linmond --version
-```
-
-### Platform-Specific Notes
-
-**Ubuntu 24.04**:
-- ✅ All dependencies available in main repos
-- ✅ BTF enabled by default (kernel 6.8+)
-- ✅ libbpf 1.3+ available
-
-**RHEL 9**:
-- ✅ Full eBPF support (kernel 5.14+)
-- ⚠️ May need CRB repo for libbpf-devel
-- ✅ BTF enabled by default
-- ⚠️ SELinux policy required (see below)
-
-**RHEL 10** (when released):
-- ✅ Expected to have kernel 6.x+
-- ✅ Full modern eBPF support
-
-**Rocky Linux / AlmaLinux**:
-- ✅ Same as RHEL, but free
-- ⚠️ Enable 'crb' or 'powertools' repo
-- No subscription needed
-
-## Running
-
-```bash
-# Run in foreground (for testing)
-sudo ./build/linmond
-
-# Install as systemd service
-sudo make install
-sudo systemctl enable linmond
-sudo systemctl start linmond
-```
-
-### SELinux (RHEL 9 / Rocky Linux / AlmaLinux)
-
-On systems with SELinux enforcing, install the SELinux policy module:
-
-```bash
-cd selinux
-sudo ./install-selinux.sh
-```
-
-This allows linmond to use eBPF for system monitoring. If you see SELinux denials:
-```bash
-# Check for denials
-ausearch -m avc -ts recent | grep linmond
-
-# Generate additional policy if needed
-ausearch -m avc -ts recent | audit2allow -M linmond_extra
-sudo semodule -i linmond_extra.pp
-```
+See **[INSTALL.md](INSTALL.md)** for complete dependency lists for Ubuntu and RHEL.
 
 ## Configuration
 
@@ -471,7 +347,8 @@ See **[MONITORING.md](MONITORING.md)** for complete troubleshooting guide.
 
 ## Documentation
 
-- **[README.md](README.md)** - This file: overview, installation, configuration
+- **[README.md](README.md)** - This file: overview, quick start, configuration
+- **[INSTALL.md](INSTALL.md)** - Installation guide: dependencies, build, troubleshooting
 - **[MONITORING.md](MONITORING.md)** - Monitoring guide: queries, alerts, integrations
 - **[SECURITY.md](SECURITY.md)** - Security features and hardening details
 - **[CLAUDE.md](CLAUDE.md)** - Development guide: architecture, building, contributing
