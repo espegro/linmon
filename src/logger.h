@@ -4,7 +4,9 @@
 #ifndef __LINMON_LOGGER_H
 #define __LINMON_LOGGER_H
 
+#include <stdio.h>
 #include <stdbool.h>
+#include <pthread.h>
 #include "../bpf/common.h"
 
 // Initialize logger with output file
@@ -38,6 +40,12 @@ int logger_log_privilege_event(const struct privilege_event *event);
 
 // Log a security monitoring event (MITRE ATT&CK detection)
 int logger_log_security_event(const struct security_event *event);
+
+// Get logger file pointer (for daemon lifecycle events)
+FILE *logger_get_fp(void);
+
+// Get logger mutex (for thread-safe access)
+pthread_mutex_t *logger_get_mutex(void);
 
 // Cleanup logger
 void logger_cleanup(void);

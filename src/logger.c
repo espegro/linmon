@@ -745,6 +745,16 @@ int logger_log_security_event(const struct security_event *event)
     return 0;
 }
 
+FILE *logger_get_fp(void)
+{
+    return log_fp;
+}
+
+pthread_mutex_t *logger_get_mutex(void)
+{
+    return &log_mutex;
+}
+
 void logger_cleanup(void)
 {
     if (log_fp) {

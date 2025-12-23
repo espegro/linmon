@@ -10,6 +10,7 @@
 #include <getopt.h>
 #include <sys/resource.h>
 #include <sys/capability.h>
+#include <syslog.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
@@ -30,12 +31,72 @@ static volatile bool reload_config = false;
 static struct linmon_config global_config = {0};
 static const char *config_path = "/etc/linmon/linmon.conf";
 
-static void sig_handler(int sig)
+// Signal information for tamper detection logging
+static volatile sig_atomic_t last_signal = 0;
+static volatile pid_t signal_sender_pid = 0;
+static volatile uid_t signal_sender_uid = 0;
+
+// Enhanced signal handler with sender information (tamper detection)
+static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
 {
+    (void)ucontext;
+
+    last_signal = sig;
+    if (info) {
+        signal_sender_pid = info->si_pid;
+        signal_sender_uid = info->si_uid;
+    }
+
     if (sig == SIGINT || sig == SIGTERM) {
         exiting = true;
     } else if (sig == SIGHUP) {
         reload_config = true;
+    }
+}
+
+// Log daemon lifecycle event to both JSON and syslog
+static void log_daemon_event(const char *event_type, const char *message,
+                              int sig, pid_t sender_pid, uid_t sender_uid)
+{
+    char timestamp[64];
+    struct timespec ts;
+    struct tm tm_info;
+
+    // Format timestamp
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tm_info);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm_info);
+    snprintf(timestamp + strlen(timestamp), sizeof(timestamp) - strlen(timestamp),
+             ".%03ldZ", ts.tv_nsec / 1000000);
+
+    // Log to syslog (goes to journald on systemd systems)
+    if (sig > 0) {
+        syslog(LOG_WARNING, "%s: signal=%d sender_pid=%d sender_uid=%d - %s",
+               event_type, sig, (int)sender_pid, (int)sender_uid, message);
+    } else {
+        syslog(LOG_INFO, "%s: %s", event_type, message);
+    }
+
+    // Also log to JSON if logger is initialized
+    // Note: We use fprintf directly since logger may not have a daemon_event function
+    FILE *log_fp = logger_get_fp();
+    if (log_fp) {
+        pthread_mutex_t *mutex = logger_get_mutex();
+        if (mutex) pthread_mutex_lock(mutex);
+
+        fprintf(log_fp, "{\"timestamp\":\"%s\",\"type\":\"%s\"", timestamp, event_type);
+        if (sig > 0) {
+            const char *sig_name = (sig == SIGTERM) ? "SIGTERM" :
+                                   (sig == SIGINT) ? "SIGINT" :
+                                   (sig == SIGHUP) ? "SIGHUP" : "UNKNOWN";
+            fprintf(log_fp, ",\"signal\":\"%s\",\"signal_num\":%d", sig_name, sig);
+            fprintf(log_fp, ",\"sender_pid\":%d,\"sender_uid\":%d",
+                    (int)sender_pid, (int)sender_uid);
+        }
+        fprintf(log_fp, ",\"message\":\"%s\"}\n", message);
+        fflush(log_fp);
+
+        if (mutex) pthread_mutex_unlock(mutex);
     }
 }
 
@@ -687,7 +748,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.13\n");
+            printf("LinMon version 1.0.14\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -696,10 +757,19 @@ int main(int argc, char **argv)
         }
     }
 
-    // Set up signal handlers
-    signal(SIGINT, sig_handler);
-    signal(SIGTERM, sig_handler);
-    signal(SIGHUP, sig_handler);
+    // Set up signal handlers with sigaction (captures sender info for tamper detection)
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = sig_handler_info;
+    sa.sa_flags = SA_SIGINFO;  // Use sa_sigaction instead of sa_handler
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+
+    // Initialize syslog for daemon lifecycle events (goes to journald on systemd)
+    openlog("linmond", LOG_PID | LOG_CONS, LOG_DAEMON);
 
     // Set up libbpf logging
     libbpf_set_print(libbpf_print_fn);
@@ -858,10 +928,16 @@ int main(int argc, char **argv)
     printf("Events logged to: %s\n",
            global_config.log_file ? global_config.log_file : "/var/log/linmon/events.json");
 
+    // Log daemon startup (tamper detection - visible in syslog/journal)
+    log_daemon_event("daemon_start", "LinMon v1.0.14 monitoring started", 0, 0, 0);
+
     // Main event loop - poll for events
     while (!exiting) {
         // Check for config reload
         if (reload_config) {
+            // Log config reload with sender info (tamper detection)
+            log_daemon_event("daemon_reload", "Configuration reload requested",
+                            SIGHUP, signal_sender_pid, signal_sender_uid);
             printf("\n[SIGHUP] Reloading configuration...\n");
 
             struct linmon_config new_config = {0};
@@ -935,9 +1011,17 @@ int main(int argc, char **argv)
         }
     }
 
+    // Log shutdown with signal info (tamper detection - who stopped us?)
+    if (last_signal > 0) {
+        log_daemon_event("daemon_shutdown", "LinMon terminated by signal",
+                        last_signal, signal_sender_pid, signal_sender_uid);
+    }
     printf("\nLinMon shutting down...\n");
 
 cleanup:
+    // Close syslog
+    closelog();
+
     // Cleanup
     ring_buffer__free(rb);
     linmon_bpf__destroy(skel);
