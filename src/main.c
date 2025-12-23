@@ -687,7 +687,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.10\n");
+            printf("LinMon version 1.0.11\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:

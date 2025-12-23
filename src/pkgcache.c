@@ -71,12 +71,46 @@ static void detect_pkg_manager(void)
     }
 }
 
+// Escape path for safe shell use (prevent command injection)
+// Escapes single quotes: ' becomes '\''
+// Returns 0 on success, -1 if output buffer too small or path contains invalid chars
+static int escape_path_for_shell(const char *path, char *escaped, size_t escaped_size)
+{
+    size_t j = 0;
+
+    for (size_t i = 0; path[i] != '\0'; i++) {
+        char c = path[i];
+
+        // Reject paths with newlines or null bytes (shouldn't happen but be safe)
+        if (c == '\n' || c == '\r')
+            return -1;
+
+        if (c == '\'') {
+            // Replace ' with '\'' (close quote, escaped quote, reopen quote)
+            if (j + 4 >= escaped_size)
+                return -1;
+            escaped[j++] = '\'';
+            escaped[j++] = '\\';
+            escaped[j++] = '\'';
+            escaped[j++] = '\'';
+        } else {
+            if (j + 1 >= escaped_size)
+                return -1;
+            escaped[j++] = c;
+        }
+    }
+
+    escaped[j] = '\0';
+    return 0;
+}
+
 // Look up package for a file using package manager
 // Returns package name in buf, or empty string if not from package
 static int query_package_manager(const char *path, char *buf, size_t buflen)
 {
     FILE *fp;
-    char cmd[PKG_PATH_MAX + 64];
+    char escaped_path[PKG_PATH_MAX * 4];  // Worst case: all single quotes
+    char cmd[PKG_PATH_MAX * 4 + 64];
     char line[256];
     int ret = -1;
 
@@ -85,15 +119,19 @@ static int query_package_manager(const char *path, char *buf, size_t buflen)
     if (detected_pkg_manager == PKG_UNKNOWN)
         return -ENOTSUP;
 
+    // Escape path to prevent command injection
+    if (escape_path_for_shell(path, escaped_path, sizeof(escaped_path)) != 0)
+        return -EINVAL;
+
     // Build command based on package manager
     if (detected_pkg_manager == PKG_DPKG) {
         // dpkg -S /path/to/file
         // Output: "package: /path/to/file" or error
-        snprintf(cmd, sizeof(cmd), "dpkg -S '%s' 2>/dev/null", path);
+        snprintf(cmd, sizeof(cmd), "dpkg -S '%s' 2>/dev/null", escaped_path);
     } else if (detected_pkg_manager == PKG_RPM) {
         // rpm -qf /path/to/file
         // Output: "package-version" or error
-        snprintf(cmd, sizeof(cmd), "rpm -qf '%s' 2>/dev/null", path);
+        snprintf(cmd, sizeof(cmd), "rpm -qf '%s' 2>/dev/null", escaped_path);
     } else {
         return -ENOTSUP;
     }
