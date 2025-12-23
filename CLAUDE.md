@@ -371,3 +371,61 @@ RHEL 9 has stricter eBPF security policies:
   - `CONFIG_BPF_JIT=y` (JIT compilation for performance)
 
 Check BTF support: `ls /sys/kernel/btf/vmlinux` (should exist)
+
+## Design Decisions
+
+### Features Considered But Not Implemented
+
+#### Application Whitelisting / Execution Prevention
+
+**Idea**: Block execution of binaries not from package manager (dpkg/rpm)
+
+**Why considered**:
+- Would prevent most malware from executing
+- Strong security posture for managed workstations
+- Compliance requirement for some environments (PCI-DSS, HIPAA)
+
+**Why not implemented**:
+1. **Technical limitation**: eBPF cannot block exec() syscalls
+   - eBPF tracepoints trigger AFTER exec has completed
+   - Would require LSM BPF hooks (kernel >= 5.7, requires `CONFIG_BPF_LSM=y`)
+   - LSM BPF requires CAP_SYS_ADMIN even after loading - conflicts with LinMon's privilege dropping
+
+2. **Better alternatives exist**:
+   - AppArmor (Ubuntu default) - can enforce execution policies
+   - SELinux (RHEL default) - can enforce execution policies
+   - Both are mature, well-tested, and designed for this purpose
+
+3. **LinMon's role**: Detection, not prevention
+   - LinMon is designed for monitoring and audit logging
+   - Integration with SIEM for alerting and incident response
+   - Can be used alongside AppArmor/SELinux for defense-in-depth
+
+**Recommended approach**:
+- Use AppArmor/SELinux for enforcement (blocking)
+- Use LinMon for detection and audit trail
+- LinMon logs package verification status in events (`"package": null` for unpackaged binaries)
+- SIEM alerts on suspicious patterns
+- Provides both prevention (LSM) and detection (LinMon) layers
+
+**Example detection with LinMon**:
+```json
+{
+  "type": "process_exec",
+  "filename": "/tmp/suspicious_binary",
+  "package": null,
+  "sha256": "deadbeef...",
+  "uid": 1000,
+  "username": "alice"
+}
+```
+
+This event can trigger SIEM alerts for:
+- Execution of unpackaged binaries
+- Binaries from suspicious locations (/tmp, /dev/shm)
+- Modified package binaries (`pkg_modified: true`)
+
+**Research notes**: Theoretical LSM policies were explored but determined to be:
+- Not production-ready (would break desktop workflows)
+- Require extensive testing and gradual rollout
+- Better suited as separate project, not part of LinMon core
