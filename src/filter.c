@@ -19,20 +19,57 @@ static bool redact_enabled = true;
 static char **ignore_file_paths = NULL;
 static int ignore_file_path_count = 0;
 
-// Sensitive patterns to redact
+// Sensitive patterns to redact (value follows immediately after pattern)
+// For patterns ending with '=' or ' ', value starts right after
+// For patterns like '--password', we handle both '=' and space-separated
 static const char *sensitive_patterns[] = {
+    // Assignment-style (value after =)
     "password=",
     "passwd=",
     "pwd=",
     "pass=",
     "token=",
     "api_key=",
+    "api-key=",
     "apikey=",
     "secret=",
     "auth=",
-    "key=",
-    "-p ", // Common password flag
+    "auth_token=",
+    "auth-token=",
+    "access_token=",
+    "access-token=",
+    "client_secret=",
+    "client-secret=",
+    "private_key=",
+    "private-key=",
+    "credential=",
+    "credentials=",
+    // Long options with = (--option=value)
+    "--password=",
+    "--passwd=",
+    "--token=",
+    "--secret=",
+    "--api-key=",
+    "--apikey=",
+    "--auth=",
+    "--credential=",
+    "--private-key=",
+    // Short option with space (-p value)
+    "-p ",
+    NULL
+};
+
+// Long options that take space-separated values (--option value)
+static const char *space_separated_options[] = {
     "--password",
+    "--passwd",
+    "--token",
+    "--secret",
+    "--api-key",
+    "--apikey",
+    "--auth",
+    "--credential",
+    "--private-key",
     NULL
 };
 
@@ -193,59 +230,115 @@ bool filter_should_log_file(const char *filename)
 void filter_redact_cmdline(char *cmdline, size_t size)
 {
     const char **pattern;
-    char *pos, *end;
+    char *pos, *end, *search_start;
     size_t len;
 
     if (!redact_enabled || !cmdline || size == 0)
         return;
 
-    // Look for each sensitive pattern
+    // Look for each sensitive pattern (patterns where value follows immediately)
     for (pattern = sensitive_patterns; *pattern != NULL; pattern++) {
-        pos = strstr(cmdline, *pattern);
-        if (!pos)
-            continue;
+        search_start = cmdline;
+        while ((pos = strstr(search_start, *pattern)) != NULL) {
+            // Find the value part (after the pattern)
+            pos += strlen(*pattern);
 
-        // Find the value part (after the pattern)
-        pos += strlen(*pattern);
-
-        // Find the end of the value (space, quote, or end of string)
-        end = pos;
-        bool in_quotes = (*pos == '"' || *pos == '\'');
-        if (in_quotes) {
-            char quote = *pos;
-            end++;
-            while (*end && *end != quote)
+            // Find the end of the value (space, quote, or end of string)
+            end = pos;
+            bool in_quotes = (*pos == '"' || *pos == '\'');
+            if (in_quotes) {
+                char quote = *pos;
                 end++;
-        } else {
-            while (*end && !isspace(*end))
-                end++;
-        }
+                while (*end && *end != quote)
+                    end++;
+            } else {
+                while (*end && !isspace(*end))
+                    end++;
+            }
 
-        // Redact the value
-        len = end - pos;
-        if (len > 0 && len < size) {
-            memset(pos, '*', len);
+            // Redact the value
+            len = end - pos;
+            if (len > 0 && (size_t)(end - cmdline) <= size) {
+                memset(pos, '*', len);
+            }
+
+            // Continue searching after this match
+            search_start = end;
         }
     }
 
-    // Also redact anything that looks like a password in common formats
-    // -p<password> or --password <password>
-    pos = cmdline;
-    while ((pos = strstr(pos, "-p")) != NULL) {
+    // Handle space-separated long options (--password value, --token value, etc.)
+    for (pattern = space_separated_options; *pattern != NULL; pattern++) {
+        size_t pattern_len = strlen(*pattern);
+        search_start = cmdline;
+
+        while ((pos = strstr(search_start, *pattern)) != NULL) {
+            char *after_pattern = pos + pattern_len;
+
+            // Check if followed by space (not '=' which is handled above)
+            if (*after_pattern == ' ') {
+                // Skip the space
+                pos = after_pattern + 1;
+
+                // Skip any additional spaces
+                while (*pos == ' ')
+                    pos++;
+
+                // Skip if no value or if it's another option
+                if (*pos == '\0' || *pos == '-') {
+                    search_start = pos;
+                    continue;
+                }
+
+                // Find end of value
+                end = pos;
+                bool in_quotes = (*pos == '"' || *pos == '\'');
+                if (in_quotes) {
+                    char quote = *pos;
+                    end++;
+                    while (*end && *end != quote)
+                        end++;
+                } else {
+                    while (*end && !isspace(*end))
+                        end++;
+                }
+
+                // Redact the value
+                len = end - pos;
+                if (len > 0 && (size_t)(end - cmdline) <= size) {
+                    memset(pos, '*', len);
+                }
+
+                search_start = end;
+            } else {
+                // Not followed by space, skip (handled by = patterns)
+                search_start = after_pattern;
+            }
+        }
+    }
+
+    // Also redact -p<password> format (no space between -p and password)
+    search_start = cmdline;
+    while ((pos = strstr(search_start, "-p")) != NULL) {
+        // Make sure we're not matching --password or similar
+        if (pos > cmdline && *(pos - 1) == '-') {
+            search_start = pos + 2;
+            continue;
+        }
+
         // Check bounds before accessing pos[2]
-        if ((pos + 2) < (cmdline + size) && pos[2] != ' ' && pos[2] != '\0') {
-            // Format: -pPASSWORD
+        if ((size_t)(pos + 2 - cmdline) < size && pos[2] != ' ' && pos[2] != '\0' && pos[2] != '-') {
+            // Format: -pPASSWORD (no space)
             end = pos + 2;
-            while (*end && !isspace(*end) && (end - cmdline) < (long)size)
+            while (*end && !isspace(*end) && (size_t)(end - cmdline) < size)
                 end++;
             len = end - (pos + 2);
-            if (len > 0 && (pos + 2 + len - cmdline) <= (long)size)
+            if (len > 0 && (size_t)(pos + 2 + len - cmdline) <= size)
                 memset(pos + 2, '*', len);
+            search_start = end;
+        } else {
+            // Advance safely
+            search_start = pos + 2;
         }
-        // Advance safely
-        if ((pos + 2) < (cmdline + size))
-            pos += 2;
-        else
-            break;
     }
 }

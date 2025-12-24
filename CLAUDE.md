@@ -372,6 +372,79 @@ RHEL 9 has stricter eBPF security policies:
 
 Check BTF support: `ls /sys/kernel/btf/vmlinux` (should exist)
 
+## Current Version & Status
+
+**Current Version**: 1.0.16 (December 2025)
+
+### Recent Features (v1.0.14-v1.0.16)
+
+1. **Tamper Detection** (v1.0.14):
+   - Daemon lifecycle events logged to syslog/journald
+   - Captures signal sender PID/UID (who stopped/reloaded LinMon)
+   - Events: `daemon_start`, `daemon_reload`, `daemon_shutdown`
+
+2. **Full Syslog Support** (v1.0.15):
+   - `log_to_syslog = true` logs ALL events to syslog (in addition to JSON)
+   - Useful for SIEM integration, central log management
+   - Daemon lifecycle events ALWAYS go to syslog regardless of setting
+
+3. **Security Monitoring** (MITRE ATT&CK):
+   - `monitor_cred_read = true` (default): T1003.008 credential file reads
+   - `monitor_ldpreload = true` (default): T1574.006 LD_PRELOAD hijacking
+   - Smart whitelisting of legitimate processes (sshd, sudo, passwd, etc.)
+   - Optional monitors: ptrace, modules, memfd, bind, unshare, execveat, bpf
+
+4. **Security Hardening** (v1.0.16):
+   - Drop supplementary groups on privilege drop (`setgroups(0, NULL)`)
+   - Absolute paths for dpkg/rpm to prevent PATH manipulation
+   - Improved password/secret redaction (20+ patterns, space-separated args)
+   - Fixed strncpy null-termination in package cache
+
+### Known Issues & Technical Debt
+
+1. **Version Number in Two Places**:
+   - `src/main.c:752` (--version output)
+   - `src/main.c:937` (daemon_start log)
+   - **TODO**: Create `#define LINMON_VERSION` in header
+
+2. **SIGHUP Limitations**:
+   - SIGHUP reloads config flags in userspace
+   - Does NOT reload BPF programs
+   - **Full restart required** when enabling new security monitors
+
+3. **Credential Read Detection**:
+   - Only detects successful open() syscalls
+   - Failed reads (permission denied) are not logged
+   - This is intentional - reduces noise from failed attacks
+
+4. **Path Traversal in Credential Detection** (internal note, not documented):
+   - eBPF sees raw syscall path argument, not kernel-resolved path
+   - `/etc/../etc/shadow` or symlinks to /etc/shadow bypass detection
+   - Fixing requires LSM hooks or file_open tracepoints (major change)
+   - Low risk: attackers rarely use redundant `/../` paths
+
+### Config Files
+
+- `linmon.conf` - Working config (host-specific values)
+- `linmon.conf.example` - Reference with all options documented
+- Keep synced: `linmon.conf` should have all sections from example
+
+**Host-specific values** (differ from example defaults):
+- `min_uid = 1000` (example: 0)
+- `ignore_threads = true` (example: false)
+- `ignore_networks = 192.168.0.0/16` (example: empty)
+
+### Release Checklist
+
+1. Update version in `src/main.c` (two places)
+2. Update version in README.md examples if referenced
+3. `make clean && make` - verify no errors
+4. Test on target systems (Ubuntu 24.04, RHEL 9)
+5. `git tag -a v1.x.x -m "Release v1.x.x: description"`
+6. `git push && git push origin v1.x.x`
+7. `gh release create v1.x.x --title "..." --notes "..."`
+8. Update `/usr/local/sbin/linmond` and restart service
+
 ## Design Decisions
 
 ### Features Considered But Not Implemented

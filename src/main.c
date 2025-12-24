@@ -10,6 +10,7 @@
 #include <getopt.h>
 #include <sys/resource.h>
 #include <sys/capability.h>
+#include <grp.h>
 #include <syslog.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
@@ -748,7 +749,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.15\n");
+            printf("LinMon version 1.0.16\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -890,7 +891,13 @@ int main(int argc, char **argv)
     // IMPORTANT: This must be done BEFORE dropping capabilities
     // (we need CAP_SETUID/CAP_SETGID to change UID/GID)
     if (getuid() == 0) {
-        // Drop GID first (must be done before UID for security)
+        // Drop supplementary groups first (prevents retaining group memberships
+        // like 'disk', 'adm', 'docker' after dropping to nobody)
+        if (setgroups(0, NULL) != 0) {
+            fprintf(stderr, "CRITICAL: Failed to drop supplementary groups: %s\n", strerror(errno));
+            goto cleanup;
+        }
+        // Drop GID (must be done before UID for security)
         if (setgid(65534) != 0) {
             fprintf(stderr, "CRITICAL: Failed to drop GID to nobody: %s\n", strerror(errno));
             goto cleanup;
@@ -906,7 +913,7 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
-        printf("✓ Dropped to UID/GID 65534 (nobody)\n");
+        printf("✓ Dropped to UID/GID 65534 (nobody), cleared supplementary groups\n");
     }
 
     // Drop all capabilities now that BPF programs are loaded and attached
@@ -933,7 +940,7 @@ int main(int argc, char **argv)
            global_config.log_file ? global_config.log_file : "/var/log/linmon/events.json");
 
     // Log daemon startup (tamper detection - visible in syslog/journal)
-    log_daemon_event("daemon_start", "LinMon v1.0.15 monitoring started", 0, 0, 0);
+    log_daemon_event("daemon_start", "LinMon v1.0.16 monitoring started", 0, 0, 0);
 
     // Main event loop - poll for events
     while (!exiting) {

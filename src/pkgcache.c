@@ -125,14 +125,15 @@ static int query_package_manager(const char *path, char *buf, size_t buflen)
         return -EINVAL;
 
     // Build command based on package manager
+    // Use absolute paths to prevent PATH manipulation attacks
     if (detected_pkg_manager == PKG_DPKG) {
         // dpkg -S /path/to/file
         // Output: "package: /path/to/file" or error
-        snprintf(cmd, sizeof(cmd), "dpkg -S '%s' 2>/dev/null", escaped_path);
+        snprintf(cmd, sizeof(cmd), "/usr/bin/dpkg -S '%s' 2>/dev/null", escaped_path);
     } else if (detected_pkg_manager == PKG_RPM) {
         // rpm -qf /path/to/file
         // Output: "package-version" or error
-        snprintf(cmd, sizeof(cmd), "rpm -qf '%s' 2>/dev/null", escaped_path);
+        snprintf(cmd, sizeof(cmd), "/usr/bin/rpm -qf '%s' 2>/dev/null", escaped_path);
     } else {
         return -ENOTSUP;
     }
@@ -230,9 +231,11 @@ static struct cache_entry *cache_add(const char *path, ino_t inode,
         return NULL;
 
     strncpy(entry->path, path, PKG_PATH_MAX - 1);
+    entry->path[PKG_PATH_MAX - 1] = '\0';
     entry->inode = inode;
     entry->mtime = mtime;
     strncpy(entry->package, package, PKG_NAME_MAX - 1);
+    entry->package[PKG_NAME_MAX - 1] = '\0';
     entry->from_package = from_package;
 
     h = hash_path(path);
@@ -250,6 +253,7 @@ static void cache_update(struct cache_entry *entry, ino_t inode,
     entry->inode = inode;
     entry->mtime = mtime;
     strncpy(entry->package, package, PKG_NAME_MAX - 1);
+    entry->package[PKG_NAME_MAX - 1] = '\0';
     entry->from_package = from_package;
 }
 
@@ -312,6 +316,7 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
             // Cache hit
             stat_hits++;
             strncpy(info->package, entry->package, PKG_NAME_MAX - 1);
+            info->package[PKG_NAME_MAX - 1] = '\0';
             info->from_package = entry->from_package;
             info->modified = false;
             pthread_mutex_unlock(&cache_mutex);
@@ -335,6 +340,7 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
             // File belongs to a package
             info->from_package = true;
             strncpy(info->package, package, PKG_NAME_MAX - 1);
+            info->package[PKG_NAME_MAX - 1] = '\0';
 
             // Check if this was previously from a different package
             // or if it's a revalidation (file was modified)

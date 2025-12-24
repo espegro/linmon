@@ -13,11 +13,14 @@ LinMon drops to `nobody` user (UID/GID 65534) after:
 - All privileged operations complete
 
 ```c
-setgid(65534);  // Drop to nobody group
-setuid(65534);  // Drop to nobody user
+setgroups(0, NULL);  // Clear ALL supplementary groups (disk, adm, docker, etc.)
+setgid(65534);       // Drop to nobody group
+setuid(65534);       // Drop to nobody user
 ```
 
-**Critical**: This must happen BEFORE dropping capabilities (requires CAP_SETUID/CAP_SETGID).
+**Critical**:
+- Supplementary groups must be cleared first (prevents retaining privileged group memberships)
+- This must happen BEFORE dropping capabilities (requires CAP_SETUID/CAP_SETGID)
 
 ### 2. Capability Dropping (Second)
 After UID/GID are dropped, LinMon drops ALL capabilities:
