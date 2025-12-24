@@ -25,14 +25,21 @@ fi
 echo -e "${GREEN}=== LinMon Installation ===${NC}"
 
 # 1. Create log directory with proper permissions
-echo -e "${YELLOW}[1/6]${NC} Creating log directory..."
+echo -e "${YELLOW}[1/7]${NC} Creating log directory..."
 mkdir -p /var/log/linmon
 chown nobody:${NOBODY_GROUP} /var/log/linmon
 chmod 0750 /var/log/linmon
 echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
 
-# 2. Create and secure config directory
-echo -e "${YELLOW}[2/6]${NC} Installing configuration..."
+# 2. Create cache directory for package verification
+echo -e "${YELLOW}[2/7]${NC} Creating cache directory..."
+mkdir -p /var/cache/linmon
+chown nobody:${NOBODY_GROUP} /var/cache/linmon
+chmod 0750 /var/cache/linmon
+echo -e "${GREEN}✓${NC} Cache directory: /var/cache/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
+
+# 3. Create and secure config directory
+echo -e "${YELLOW}[3/7]${NC} Installing configuration..."
 mkdir -p /etc/linmon
 
 # Only copy config if it doesn't exist (don't overwrite existing config)
@@ -48,7 +55,7 @@ chmod 0600 /etc/linmon/linmon.conf
 echo -e "${GREEN}✓${NC} Config permissions: root:root, mode: 0600"
 
 # 3. Install binary
-echo -e "${YELLOW}[3/6]${NC} Installing binary..."
+echo -e "${YELLOW}[4/7]${NC} Installing binary..."
 if [ ! -f build/linmond ]; then
     echo -e "${RED}Error: build/linmond not found. Run 'make' first.${NC}"
     exit 1
@@ -60,7 +67,7 @@ chmod 0755 /usr/local/sbin/linmond
 echo -e "${GREEN}✓${NC} Installed binary: /usr/local/sbin/linmond"
 
 # 4. Install systemd service
-echo -e "${YELLOW}[4/6]${NC} Installing systemd service..."
+echo -e "${YELLOW}[5/7]${NC} Installing systemd service..."
 if [ -f linmond.service ]; then
     cp linmond.service /etc/systemd/system/
     systemctl daemon-reload
@@ -70,7 +77,7 @@ else
 fi
 
 # 4.5. Install logrotate config
-echo -e "${YELLOW}[4.5/6]${NC} Installing logrotate configuration..."
+echo -e "${YELLOW}[6/7]${NC} Installing logrotate configuration..."
 if [ -f linmond.logrotate ]; then
     # Adjust group name for distro (nogroup for Debian/Ubuntu, nobody for RHEL/Rocky)
     sed "s/nobody nogroup/nobody ${NOBODY_GROUP}/" linmond.logrotate > /etc/logrotate.d/linmond
