@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2025-12-25
+
+### Added
+- **Sudo session tracking** - `sudo_uid` and `sudo_user` fields in process_exec events
+- eBPF-based environment scanning to detect SUDO_UID (no capabilities required)
+- Enables tracking user activity across sudo privilege escalation
+
+### Technical
+- Scans up to 4KB of process environment at exec time
+- Uses bounded loops with #pragma unroll for BPF verifier compatibility
+- Works with large LS_COLORS environment variables
+
 ## [1.1.0] - 2025-12-25
 
 ### Added
