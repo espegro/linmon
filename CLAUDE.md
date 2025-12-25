@@ -37,7 +37,8 @@ LinMon is a Linux activity monitoring service similar to Sysmon for Windows. It 
 - `src/filter.c` - Process name filtering and sensitive data redaction
 - `src/userdb.c` - UID→username resolution with caching
 - `src/filehash.c` - SHA256 hashing of executed binaries
-- `src/procfs.c` - Reading from `/proc` (command-line arguments)
+- `src/procfs.c` - Reading from `/proc` (command-line arguments, environment)
+- `src/pkgcache.c` - Package verification cache (dpkg/rpm) for binary trust checking
 
 ### Event Flow
 
@@ -70,8 +71,9 @@ LinMon uses a **multi-layer filtering approach** for performance:
    - **TTY check**: Only processes with controlling TTY (configurable via `require_tty`)
    - **UID range**: Configured via BPF map (`min_uid`, `max_uid`)
    - **Thread filtering**: Skip thread events, only log main processes (configurable via `ignore_threads`)
-   - **Rate limiting**: Token bucket algorithm (20 burst, 100 events/sec per UID) to prevent flooding
+   - **Rate limiting**: Token bucket algorithm (50 burst, 200 events/sec per UID) to prevent flooding
    - **CIDR filtering**: Skip network events to/from ignored IP ranges (e.g., `127.0.0.0/8`)
+   - **Sudo tracking**: Scans process environment for SUDO_UID to track user across privilege escalation
    - Exit early to minimize overhead
 
 2. **Userspace**: Rich filtering and processing
@@ -158,10 +160,16 @@ The consolidated `bpf/linmon.bpf.c` file contains:
 - GPL license declaration: `char LICENSE[] SEC("license") = "GPL";`
 - **BPF maps**:
   - `config_map` (ARRAY): Configuration from userspace (`min_uid`, `max_uid`, `capture_cmdline`, etc.)
-  - `events` (RINGBUF): Ring buffer for sending events to userspace (256KB)
+  - `events` (RINGBUF): Ring buffer for sending events to userspace (1MB)
   - `rate_limit_map` (LRU_HASH): Per-UID token bucket state for rate limiting
   - `ignore_networks_map` (HASH): CIDR blocks to ignore for network events
-- **Helper functions**: `should_monitor_uid()`, `is_interactive_session()`, `should_rate_limit()`, `is_ignored_network()`
+- **Helper functions**:
+  - `should_monitor_uid()` - UID range filtering
+  - `should_monitor_session()` - TTY requirement check
+  - `should_rate_limit()` - Token bucket rate limiting
+  - `should_ignore_network()` - CIDR filtering for network events
+  - `read_sudo_uid()` - Scans process environment for SUDO_UID (up to 4KB, 48 chunks)
+  - `fill_session_info()` - Populates session ID, process group, TTY name
 - **eBPF programs**: Multiple `SEC("tp/...")` and `SEC("kprobe/...")` sections for different events
 - All kernel struct access uses `BPF_CORE_READ()` macros for CO-RE portability
 
@@ -184,10 +192,11 @@ LinMon uses BPF maps for bidirectional communication:
 **eBPF Kernel-Space Filtering** (`bpf/linmon.bpf.c`):
 
 1. **UID Range** - `should_monitor_uid()`: Reads `min_uid`/`max_uid` from `config_map`
-2. **TTY Check** - `is_interactive_session()`: Only processes with controlling TTY (if `require_tty` enabled)
+2. **TTY Check** - `should_monitor_session()`: Only processes with controlling TTY (if `require_tty` enabled)
 3. **Thread Filtering**: Skip thread events (pid != tgid) if `ignore_threads` enabled
-4. **Rate Limiting** - `should_rate_limit()`: Token bucket (20 burst, 100 events/sec per UID)
-5. **CIDR Filtering** - `is_ignored_network()`: Skip network events to/from ignored IP ranges
+4. **Rate Limiting** - `should_rate_limit()`: Token bucket (50 burst, 200 events/sec per UID)
+5. **CIDR Filtering** - `should_ignore_network()`: Skip network events to/from ignored IP ranges
+6. **Sudo Tracking** - `read_sudo_uid()`: Scans process environment for SUDO_UID (only for root processes)
 
 **Userspace Filtering** (`src/filter.c`):
 
