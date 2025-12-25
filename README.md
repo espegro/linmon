@@ -122,23 +122,29 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 }
 ```
 
-#### Process Execution (Background/Daemon - no TTY)
+#### Process Execution via sudo (with session tracking)
 ```json
 {
   "timestamp": "2024-12-22T14:30:16.456Z",
   "hostname": "webserver01",
   "type": "process_exec",
   "pid": 5678,
-  "ppid": 1,
+  "ppid": 1234,
   "sid": 5678,
   "pgid": 5678,
   "uid": 0,
   "username": "root",
+  "sudo_uid": 1000,
+  "sudo_user": "alice",
   "tty": "",
-  "comm": "cron",
-  "filename": "/usr/sbin/cron"
+  "comm": "systemctl",
+  "filename": "/usr/bin/systemctl",
+  "sha256": "def456...",
+  "cmdline": "systemctl restart nginx"
 }
 ```
+
+> **Note**: `sudo_uid` and `sudo_user` fields are automatically added when a process is running via sudo, enabling you to track user activity across privilege escalation.
 
 #### Network Connection (TCP)
 ```json

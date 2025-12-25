@@ -41,6 +41,17 @@ grep '"type":"process_exec"' /var/log/linmon/events.json | \
   jq -r '[.timestamp, .username, .cmdline] | @tsv' | column -t
 ```
 
+### Track User Activity Across sudo
+```bash
+# Show all activity by a user (including commands run via sudo)
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq 'select(.uid == 1000 or .sudo_uid == 1000)'
+
+# List commands run as root by each sudo user
+grep '"type":"process_exec"' /var/log/linmon/events.json | \
+  jq -r 'select(.sudo_uid) | [.timestamp, .sudo_user, .cmdline] | @tsv' | column -t
+```
+
 ## Event Types
 
 LinMon logs the following event types:
@@ -56,8 +67,10 @@ LinMon logs the following event types:
   "type": "process_exec",
   "pid": 12345,
   "ppid": 1234,
-  "uid": 1000,
-  "username": "alice",
+  "uid": 0,
+  "username": "root",
+  "sudo_uid": 1000,
+  "sudo_user": "alice",
   "comm": "bash",
   "filename": "/usr/bin/bash",
   "cmdline": "/bin/bash -c ls",
