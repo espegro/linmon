@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2025-12-25
+
+### Fixed
+- **Event dropping under load** - Increased rate limiting thresholds to prevent event loss
+  - Token bucket burst: 20 → 50 events
+  - Refill rate: 100 → 200 events/sec
+  - Ring buffer: 256KB → 1MB
+- UID 0 (root) events were being dropped due to shared token bucket across system processes
+
 ## [1.1.1] - 2025-12-25
 
 ### Added

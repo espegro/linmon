@@ -20,7 +20,7 @@ struct {
 // Ring buffer for sending events to userspace
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024); // 256KB ring buffer
+    __uint(max_entries, 1024 * 1024); // 1MB ring buffer (increased from 256KB)
 } events SEC(".maps");
 
 // Rate limiting state per UID
@@ -50,11 +50,12 @@ struct {
 // ============================================================================
 
 // Token bucket rate limiting:
-// - Allow burst of up to 20 events
-// - Refill at 100 events/second (1 token per 10ms)
+// - Allow burst of up to 50 events (increased from 20)
+// - Refill at 200 events/second (1 token per 5ms, increased from 100/sec)
 // - This allows normal activity spikes while preventing flooding
-#define RATE_LIMIT_MAX_TOKENS 20
-#define RATE_LIMIT_REFILL_INTERVAL_NS 10000000ULL  // 10ms = 100 events/sec
+// - UID 0 (root) is shared by many system processes, needs higher limits
+#define RATE_LIMIT_MAX_TOKENS 50
+#define RATE_LIMIT_REFILL_INTERVAL_NS 5000000ULL  // 5ms = 200 events/sec
 
 static __always_inline bool should_rate_limit(__u32 uid)
 {
