@@ -372,52 +372,27 @@ RHEL 9 has stricter eBPF security policies:
 
 Check BTF support: `ls /sys/kernel/btf/vmlinux` (should exist)
 
-## Current Version & Status
+## Version
 
-**Current Version**: 1.0.16 (December 2025)
+Current version is in the `VERSION` file. See `CHANGELOG.md` for release history.
 
-### Recent Features (v1.0.14-v1.0.16)
+The version is passed to the compiler via `-DLINMON_VERSION` and used in:
+- `--version` output
+- `daemon_start` log messages
 
-1. **Tamper Detection** (v1.0.14):
-   - Daemon lifecycle events logged to syslog/journald
-   - Captures signal sender PID/UID (who stopped/reloaded LinMon)
-   - Events: `daemon_start`, `daemon_reload`, `daemon_shutdown`
+### Known Limitations
 
-2. **Full Syslog Support** (v1.0.15):
-   - `log_to_syslog = true` logs ALL events to syslog (in addition to JSON)
-   - Useful for SIEM integration, central log management
-   - Daemon lifecycle events ALWAYS go to syslog regardless of setting
-
-3. **Security Monitoring** (MITRE ATT&CK):
-   - `monitor_cred_read = true` (default): T1003.008 credential file reads
-   - `monitor_ldpreload = true` (default): T1574.006 LD_PRELOAD hijacking
-   - Smart whitelisting of legitimate processes (sshd, sudo, passwd, etc.)
-   - Optional monitors: ptrace, modules, memfd, bind, unshare, execveat, bpf
-
-4. **Security Hardening** (v1.0.16):
-   - Drop supplementary groups on privilege drop (`setgroups(0, NULL)`)
-   - Absolute paths for dpkg/rpm to prevent PATH manipulation
-   - Improved password/secret redaction (20+ patterns, space-separated args)
-   - Fixed strncpy null-termination in package cache
-
-### Known Issues & Technical Debt
-
-1. **Version Number in Two Places**:
-   - `src/main.c:752` (--version output)
-   - `src/main.c:937` (daemon_start log)
-   - **TODO**: Create `#define LINMON_VERSION` in header
-
-2. **SIGHUP Limitations**:
+1. **SIGHUP Limitations**:
    - SIGHUP reloads config flags in userspace
    - Does NOT reload BPF programs
    - **Full restart required** when enabling new security monitors
 
-3. **Credential Read Detection**:
+2. **Credential Read Detection**:
    - Only detects successful open() syscalls
    - Failed reads (permission denied) are not logged
    - This is intentional - reduces noise from failed attacks
 
-4. **Path Traversal in Credential Detection** (internal note, not documented):
+3. **Path Traversal in Credential Detection**:
    - eBPF sees raw syscall path argument, not kernel-resolved path
    - `/etc/../etc/shadow` or symlinks to /etc/shadow bypass detection
    - Fixing requires LSM hooks or file_open tracepoints (major change)

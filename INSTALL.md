@@ -127,10 +127,11 @@ cd linmon
 
 **Option 2: Release tarball**:
 ```bash
-# Download latest release
-curl -L -O https://github.com/espegro/linmon/archive/refs/tags/v1.0.12.tar.gz
-tar xzf v1.0.12.tar.gz
-cd linmon-1.0.12
+# Download latest release (replace VERSION with actual version, e.g., v1.1.0)
+VERSION=v1.1.0
+curl -L -O https://github.com/espegro/linmon/archive/refs/tags/${VERSION}.tar.gz
+tar xzf ${VERSION}.tar.gz
+cd linmon-${VERSION#v}
 ```
 
 ### Build
@@ -158,7 +159,7 @@ make
 **Verify build**:
 ```bash
 ./build/linmond --version
-# Should output: LinMon version 1.0.12
+# Should output: LinMon version X.Y.Z (matching VERSION file)
 ```
 
 ### Build Troubleshooting

@@ -750,7 +750,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.17\n");
+            printf("LinMon version %s\n", LINMON_VERSION);
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -946,7 +946,9 @@ int main(int argc, char **argv)
            global_config.log_file ? global_config.log_file : "/var/log/linmon/events.json");
 
     // Log daemon startup (tamper detection - visible in syslog/journal)
-    log_daemon_event("daemon_start", "LinMon v1.0.17 monitoring started", 0, 0, 0);
+    char startup_msg[64];
+    snprintf(startup_msg, sizeof(startup_msg), "LinMon v%s monitoring started", LINMON_VERSION);
+    log_daemon_event("daemon_start", startup_msg, 0, 0, 0);
 
     // Periodic cache save tracking
     time_t last_cache_save = time(NULL);
@@ -1063,7 +1065,21 @@ int main(int argc, char **argv)
         log_daemon_event("daemon_shutdown", "LinMon terminated by signal",
                         last_signal, signal_sender_pid, signal_sender_uid);
     }
+
+    // Print shutdown statistics
     printf("\nLinMon shutting down...\n");
+    if (global_config.hash_binaries) {
+        unsigned long hits, misses, entries, recomputes;
+        filehash_stats(&hits, &misses, &entries, &recomputes);
+        printf("  SHA256 cache: %lu hits, %lu misses, %lu entries, %lu recomputes\n",
+               hits, misses, entries, recomputes);
+    }
+    if (global_config.verify_packages) {
+        unsigned long hits, misses, entries, recomputes;
+        pkgcache_stats(&hits, &misses, &entries, &recomputes);
+        printf("  Package cache: %lu hits, %lu misses, %lu entries, %lu recomputes\n",
+               hits, misses, entries, recomputes);
+    }
 
 cleanup:
     // Close syslog

@@ -1,5 +1,6 @@
 PROJECT := linmon
 DAEMON := linmond
+VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
 
 # Directories
 BUILD_DIR := build
@@ -41,7 +42,7 @@ endif
 
 # Flags
 INCLUDES := -I/usr/include -I$(BPF_DIR) -I$(SRC_DIR)
-CFLAGS := -Wall -Wextra -O2 -g $(INCLUDES)
+CFLAGS := -Wall -Wextra -O2 -g $(INCLUDES) -DLINMON_VERSION=\"$(VERSION)\"
 BPF_CFLAGS := -target bpf -D__TARGET_ARCH_x86 -Wall -O2 -g $(INCLUDES)
 LDFLAGS := -lbpf -lelf -lz -lpthread -lcrypto -lcap
 
