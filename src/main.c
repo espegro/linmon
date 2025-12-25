@@ -750,7 +750,7 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         case 'v':
-            printf("LinMon version 1.0.16\n");
+            printf("LinMon version 1.0.17\n");
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
         default:
@@ -946,7 +946,7 @@ int main(int argc, char **argv)
            global_config.log_file ? global_config.log_file : "/var/log/linmon/events.json");
 
     // Log daemon startup (tamper detection - visible in syslog/journal)
-    log_daemon_event("daemon_start", "LinMon v1.0.16 monitoring started", 0, 0, 0);
+    log_daemon_event("daemon_start", "LinMon v1.0.17 monitoring started", 0, 0, 0);
 
     // Periodic cache save tracking
     time_t last_cache_save = time(NULL);
