@@ -230,45 +230,19 @@ static __always_inline void fill_session_info(struct process_event *event,
     }
 }
 
-// Helper to search for SUDO_UID= in a buffer and parse the value
-static __always_inline __u32 find_sudo_uid_in_buf(char *buf, int buflen)
-{
-    #pragma unroll
-    for (int i = 0; i < 240; i++) {
-        if (i >= buflen - 15)
-            break;
-        // Check for "SUDO_UID=" (9 chars)
-        if (buf[i] == 'S' && buf[i+1] == 'U' && buf[i+2] == 'D' &&
-            buf[i+3] == 'O' && buf[i+4] == '_' && buf[i+5] == 'U' &&
-            buf[i+6] == 'I' && buf[i+7] == 'D' && buf[i+8] == '=') {
-            // Found it - parse the number
-            __u32 uid = 0;
-            #pragma unroll
-            for (int j = 0; j < 6; j++) {
-                int idx = i + 9 + j;
-                if (idx >= buflen - 1)
-                    break;
-                char c = buf[idx];
-                if (c < '0' || c > '9')
-                    break;
-                uid = uid * 10 + (c - '0');
-            }
-            return uid;
-        }
-    }
-    return 0;
-}
-
 // Helper to read SUDO_UID from process environment
 // Returns the original UID before sudo, or 0 if not running via sudo
 // Only checks processes running as root (uid 0) for performance
+//
+// Uses a simple approach: read 48 bytes and search for the exact 10-byte
+// sequence "\0SUDO_UID=" using memcmp-style comparison via helper.
 static __always_inline __u32 read_sudo_uid(struct task_struct *task)
 {
     struct mm_struct *mm;
     unsigned long env_start, env_end;
-    char buf[256];
+    // Use smaller buffer and fewer iterations
+    char buf[48];
     int ret;
-    __u32 uid;
 
     mm = BPF_CORE_READ(task, mm);
     if (!mm)
@@ -277,25 +251,48 @@ static __always_inline __u32 read_sudo_uid(struct task_struct *task)
     env_start = BPF_CORE_READ(mm, env_start);
     env_end = BPF_CORE_READ(mm, env_end);
 
-    // Sanity check
     if (env_start == 0 || env_end <= env_start)
         return 0;
 
-    // LS_COLORS can be huge (2KB+), so we need to scan further
-    // Scan up to 4KB in 256-byte chunks (unrolled for verifier)
+    // Scan from 1.5KB to 3KB in 32-byte overlapping chunks
+    // SUDO_UID is typically around 2-2.5KB after LS_COLORS
     #pragma unroll
-    for (int chunk = 0; chunk < 16; chunk++) {
-        unsigned long offset = env_start + chunk * 256;
-        if (offset >= env_end)
-            break;
+    for (int chunk = 0; chunk < 48; chunk++) {
+        unsigned long off = env_start + 1536 + chunk * 32;
+        if (off >= env_end)
+            return 0;
 
-        ret = bpf_probe_read_user(buf, sizeof(buf), (void *)offset);
+        ret = bpf_probe_read_user(buf, sizeof(buf), (void *)off);
         if (ret < 0)
-            break;
+            return 0;
 
-        uid = find_sudo_uid_in_buf(buf, 256);
-        if (uid > 0)
-            return uid;
+        // Check positions 0-31 for "\0SUDO_UID=" pattern
+        // Unrolled to avoid nested loop complexity
+        #define CHECK_POS(p) \
+            if (buf[p] == '\0' && buf[p+1] == 'S' && buf[p+2] == 'U' && \
+                buf[p+3] == 'D' && buf[p+4] == 'O' && buf[p+5] == '_' && \
+                buf[p+6] == 'U' && buf[p+7] == 'I' && buf[p+8] == 'D' && \
+                buf[p+9] == '=') { \
+                __u32 uid = 0; \
+                if (buf[p+10] >= '0' && buf[p+10] <= '9') uid = buf[p+10] - '0'; else return uid; \
+                if (buf[p+11] >= '0' && buf[p+11] <= '9') uid = uid*10 + buf[p+11] - '0'; else return uid; \
+                if (buf[p+12] >= '0' && buf[p+12] <= '9') uid = uid*10 + buf[p+12] - '0'; else return uid; \
+                if (buf[p+13] >= '0' && buf[p+13] <= '9') uid = uid*10 + buf[p+13] - '0'; else return uid; \
+                if (buf[p+14] >= '0' && buf[p+14] <= '9') uid = uid*10 + buf[p+14] - '0'; else return uid; \
+                if (buf[p+15] >= '0' && buf[p+15] <= '9') uid = uid*10 + buf[p+15] - '0'; \
+                return uid; \
+            }
+
+        CHECK_POS(0);  CHECK_POS(1);  CHECK_POS(2);  CHECK_POS(3);
+        CHECK_POS(4);  CHECK_POS(5);  CHECK_POS(6);  CHECK_POS(7);
+        CHECK_POS(8);  CHECK_POS(9);  CHECK_POS(10); CHECK_POS(11);
+        CHECK_POS(12); CHECK_POS(13); CHECK_POS(14); CHECK_POS(15);
+        CHECK_POS(16); CHECK_POS(17); CHECK_POS(18); CHECK_POS(19);
+        CHECK_POS(20); CHECK_POS(21); CHECK_POS(22); CHECK_POS(23);
+        CHECK_POS(24); CHECK_POS(25); CHECK_POS(26); CHECK_POS(27);
+        CHECK_POS(28); CHECK_POS(29); CHECK_POS(30); CHECK_POS(31);
+
+        #undef CHECK_POS
     }
 
     return 0;
