@@ -12,6 +12,7 @@
 #include <sys/capability.h>
 #include <grp.h>
 #include <syslog.h>
+#include <time.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
@@ -799,9 +800,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Initialize user database and file hashing
+    // Initialize user database
     userdb_init();
-    filehash_init();
+
+    // Initialize file hash cache if enabled
+    if (global_config.hash_binaries) {
+        filehash_init(global_config.hash_cache_file,
+                      global_config.hash_cache_size);
+    }
 
     // Initialize package cache if enabled
     if (global_config.verify_packages) {
@@ -942,6 +948,10 @@ int main(int argc, char **argv)
     // Log daemon startup (tamper detection - visible in syslog/journal)
     log_daemon_event("daemon_start", "LinMon v1.0.16 monitoring started", 0, 0, 0);
 
+    // Periodic cache save tracking
+    time_t last_cache_save = time(NULL);
+    int cache_save_interval = global_config.cache_save_interval * 60;  // Convert to seconds
+
     // Main event loop - poll for events
     while (!exiting) {
         // Check for config reload
@@ -1011,6 +1021,16 @@ int main(int argc, char **argv)
             printf("  Syslog output: %s\n", global_config.log_to_syslog ? "yes" : "no");
             printf("  Log file reopened (logrotate support)\n");
 
+            // Save caches on reload (ensures data persistence)
+            if (global_config.hash_binaries)
+                filehash_save();
+            if (global_config.verify_packages)
+                pkgcache_save();
+
+            // Update cache save interval
+            cache_save_interval = global_config.cache_save_interval * 60;
+            last_cache_save = time(NULL);
+
             reload_config = false;
         }
 
@@ -1023,6 +1043,18 @@ int main(int argc, char **argv)
         if (err < 0) {
             fprintf(stderr, "Error polling ring buffer: %d\n", err);
             break;
+        }
+
+        // Periodic cache save (if configured)
+        if (cache_save_interval > 0) {
+            time_t now = time(NULL);
+            if (now - last_cache_save >= cache_save_interval) {
+                if (global_config.hash_binaries)
+                    filehash_save();
+                if (global_config.verify_packages)
+                    pkgcache_save();
+                last_cache_save = now;
+            }
         }
     }
 

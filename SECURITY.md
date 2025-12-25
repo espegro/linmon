@@ -90,7 +90,7 @@ LinMon uses systemd hardening features that are compatible with eBPF requirement
 |---------|--------|---------|
 | `ProtectSystem=strict` | ✅ Enabled | Read-only root filesystem |
 | `ProtectHome=yes` | ✅ Enabled | No access to home directories |
-| `ReadWritePaths=/var/log/linmon` | ✅ Enabled | Only writable path |
+| `ReadWritePaths=...` | ✅ Enabled | Only writable: /var/log/linmon, /var/cache/linmon |
 | `PrivateTmp=yes` | ✅ Enabled | Isolated /tmp |
 | `ProtectKernelTunables=yes` | ✅ Enabled | No /proc/sys writes |
 | `ProtectControlGroups=yes` | ✅ Enabled | No cgroup modifications |
@@ -245,27 +245,32 @@ sudo chown nobody:nogroup /var/log/linmon
 # sudo chown nobody:nobody /var/log/linmon
 sudo chmod 0750 /var/log/linmon
 
-# 2. Secure config file
+# 2. Create cache directory for package verification
+sudo mkdir -p /var/cache/linmon
+sudo chown nobody:nogroup /var/cache/linmon  # or nobody:nobody on RHEL
+sudo chmod 0750 /var/cache/linmon
+
+# 3. Secure config file
 sudo mkdir -p /etc/linmon
 sudo cp linmon.conf /etc/linmon/
 sudo chown root:root /etc/linmon/linmon.conf
 sudo chmod 0600 /etc/linmon/linmon.conf
 
-# 3. Install binary
+# 4. Install binary
 sudo cp build/linmond /usr/local/sbin/
 sudo chown root:root /usr/local/sbin/linmond
 sudo chmod 0755 /usr/local/sbin/linmond
 
-# 4. Install hardened systemd service
+# 5. Install hardened systemd service
 sudo cp linmond.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now linmond
 
-# 5. Install logrotate configuration
+# 6. Install logrotate configuration
 sudo cp linmond.logrotate /etc/logrotate.d/linmond
 sudo chmod 0644 /etc/logrotate.d/linmond
 
-# 6. Verify privilege drop
+# 7. Verify privilege drop
 sudo journalctl -u linmond -n 20
 # Look for: "✓ Dropped to UID/GID 65534 (nobody)"
 #           "✓ Dropped all capabilities"

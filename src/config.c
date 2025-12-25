@@ -36,8 +36,14 @@ static void set_defaults(struct linmon_config *config)
     config->resolve_usernames = true;  // Default: resolve UIDs
     config->hash_binaries = true;      // Default: hash for security monitoring
     config->verify_packages = false;   // Default: off (requires dpkg/rpm)
+
+    // Cache settings
+    config->hash_cache_file = NULL;    // Use default path
+    config->hash_cache_size = 10000;   // Default: 10k entries
     config->pkg_cache_file = NULL;     // Use default path
     config->pkg_cache_size = 10000;    // Default: 10k entries
+    config->cache_save_interval = 5;   // Default: save every 5 minutes
+
     config->ignore_processes = NULL;
     config->only_processes = NULL;
     config->ignore_networks = NULL;
@@ -221,6 +227,38 @@ int load_config(struct linmon_config *config, const char *config_file)
                 continue;
             }
             config->pkg_cache_size = (int)val;
+        } else if (strcmp(key, "hash_cache_file") == 0) {
+            // Validate cache file path
+            if (value[0] != '/') {
+                fprintf(stderr, "Security: hash_cache_file must be absolute path: %s\n", value);
+                continue;
+            }
+            if (strstr(value, "..") != NULL) {
+                fprintf(stderr, "Security: hash_cache_file cannot contain '..': %s\n", value);
+                continue;
+            }
+            config->hash_cache_file = strdup(value);
+            if (!config->hash_cache_file) {
+                fprintf(stderr, "Error: Failed to allocate memory for hash_cache_file\n");
+                fclose(fp);
+                return -ENOMEM;
+            }
+        } else if (strcmp(key, "hash_cache_size") == 0) {
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 100 || val > 1000000) {
+                fprintf(stderr, "Invalid hash_cache_size (100-1000000): %s\n", value);
+                continue;
+            }
+            config->hash_cache_size = (int)val;
+        } else if (strcmp(key, "cache_save_interval") == 0) {
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 0 || val > 60) {
+                fprintf(stderr, "Invalid cache_save_interval (0-60 minutes): %s\n", value);
+                continue;
+            }
+            config->cache_save_interval = (int)val;
         } else if (strcmp(key, "ignore_processes") == 0) {
             if (strlen(value) > 0) {
                 config->ignore_processes = strdup(value);
@@ -308,5 +346,9 @@ void free_config(struct linmon_config *config)
     if (config->pkg_cache_file) {
         free(config->pkg_cache_file);
         config->pkg_cache_file = NULL;
+    }
+    if (config->hash_cache_file) {
+        free(config->hash_cache_file);
+        config->hash_cache_file = NULL;
     }
 }

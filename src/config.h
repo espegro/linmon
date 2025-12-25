@@ -38,8 +38,13 @@ struct linmon_config {
     bool resolve_usernames;   // Resolve UID to username
     bool hash_binaries;       // Calculate SHA256 of executables
     bool verify_packages;     // Check if binaries belong to system packages
+
+    // Cache settings
+    char *hash_cache_file;    // Path to hash cache file (default: /var/cache/linmon/hashes.cache)
+    int hash_cache_size;      // Max entries in hash cache (default: 10000)
     char *pkg_cache_file;     // Path to package cache file (default: /var/cache/linmon/packages.cache)
     int pkg_cache_size;       // Max entries in package cache (default: 10000)
+    int cache_save_interval;  // Minutes between periodic cache saves (default: 5, 0=shutdown only)
 
     // Process filtering
     char *ignore_processes;   // Comma-separated blacklist
