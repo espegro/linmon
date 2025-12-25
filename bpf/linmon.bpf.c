@@ -230,6 +230,77 @@ static __always_inline void fill_session_info(struct process_event *event,
     }
 }
 
+// Helper to search for SUDO_UID= in a buffer and parse the value
+static __always_inline __u32 find_sudo_uid_in_buf(char *buf, int buflen)
+{
+    #pragma unroll
+    for (int i = 0; i < 240; i++) {
+        if (i >= buflen - 15)
+            break;
+        // Check for "SUDO_UID=" (9 chars)
+        if (buf[i] == 'S' && buf[i+1] == 'U' && buf[i+2] == 'D' &&
+            buf[i+3] == 'O' && buf[i+4] == '_' && buf[i+5] == 'U' &&
+            buf[i+6] == 'I' && buf[i+7] == 'D' && buf[i+8] == '=') {
+            // Found it - parse the number
+            __u32 uid = 0;
+            #pragma unroll
+            for (int j = 0; j < 6; j++) {
+                int idx = i + 9 + j;
+                if (idx >= buflen - 1)
+                    break;
+                char c = buf[idx];
+                if (c < '0' || c > '9')
+                    break;
+                uid = uid * 10 + (c - '0');
+            }
+            return uid;
+        }
+    }
+    return 0;
+}
+
+// Helper to read SUDO_UID from process environment
+// Returns the original UID before sudo, or 0 if not running via sudo
+// Only checks processes running as root (uid 0) for performance
+static __always_inline __u32 read_sudo_uid(struct task_struct *task)
+{
+    struct mm_struct *mm;
+    unsigned long env_start, env_end;
+    char buf[256];
+    int ret;
+    __u32 uid;
+
+    mm = BPF_CORE_READ(task, mm);
+    if (!mm)
+        return 0;
+
+    env_start = BPF_CORE_READ(mm, env_start);
+    env_end = BPF_CORE_READ(mm, env_end);
+
+    // Sanity check
+    if (env_start == 0 || env_end <= env_start)
+        return 0;
+
+    // LS_COLORS can be huge (2KB+), so we need to scan further
+    // Scan up to 4KB in 256-byte chunks (unrolled for verifier)
+    #pragma unroll
+    for (int chunk = 0; chunk < 16; chunk++) {
+        unsigned long offset = env_start + chunk * 256;
+        if (offset >= env_end)
+            break;
+
+        ret = bpf_probe_read_user(buf, sizeof(buf), (void *)offset);
+        if (ret < 0)
+            break;
+
+        uid = find_sudo_uid_in_buf(buf, 256);
+        if (uid > 0)
+            return uid;
+    }
+
+    return 0;
+}
+
 // ============================================================================
 // PROCESS MONITORING
 // ============================================================================
@@ -278,6 +349,13 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
 
     // Fill session info (sid, pgid, tty)
     fill_session_info(event, task);
+
+    // Check for sudo context (only for root processes)
+    if (uid == 0) {
+        event->sudo_uid = read_sudo_uid(task);
+    } else {
+        event->sudo_uid = 0;
+    }
 
     // Read command name
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
@@ -340,6 +418,9 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 
     // Fill session info (sid, pgid, tty)
     fill_session_info(event, task);
+
+    // sudo_uid not tracked for exit (already logged at exec)
+    event->sudo_uid = 0;
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 

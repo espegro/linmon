@@ -17,6 +17,7 @@
 #include "userdb.h"
 #include "filehash.h"
 #include "pkgcache.h"
+#include "procfs.h"
 
 static FILE *log_fp = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -332,6 +333,15 @@ int logger_log_process_event(const struct process_event *event)
         json_escape(username, username_escaped, sizeof(username_escaped));
     }
 
+    // Resolve sudo username if we have sudo_uid from eBPF
+    char sudo_user[USERNAME_MAX] = {0};
+    char sudo_user_escaped[USERNAME_MAX * 6];
+
+    if (event->sudo_uid > 0 && enable_resolve_usernames) {
+        userdb_resolve(event->sudo_uid, sudo_user, sizeof(sudo_user));
+        json_escape(sudo_user, sudo_user_escaped, sizeof(sudo_user_escaped));
+    }
+
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
@@ -344,6 +354,14 @@ int logger_log_process_event(const struct process_event *event)
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    // Add sudo context if process is running via sudo (from eBPF)
+    if (event->sudo_uid > 0) {
+        fprintf(log_fp, ",\"sudo_uid\":%u", event->sudo_uid);
+        if (sudo_user[0]) {
+            fprintf(log_fp, ",\"sudo_user\":\"%s\"", sudo_user_escaped);
+        }
     }
 
     // TTY field - empty string means no controlling terminal (background process)

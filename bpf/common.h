@@ -95,6 +95,7 @@ struct process_event {
     __u32 gid;
     __u32 sid;                    // Session ID (login session)
     __u32 pgid;                   // Process group ID (job control)
+    __u32 sudo_uid;               // Original UID before sudo (0 = not via sudo)
     char tty[16];                 // TTY name (e.g., "pts/0") or empty for no TTY
     char comm[TASK_COMM_LEN];
     char filename[MAX_FILENAME_LEN];
