@@ -17,7 +17,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **Network CIDR Filtering**: Ignore traffic to private networks (kernel-level filtering)
 - **File Path Filtering**: Ignore /tmp, /proc, /sys by prefix matching
 - **Thread Filtering**: Optionally ignore threads, only log main processes
-- **Rate Limiting**: Token bucket algorithm (20 burst, 100 events/sec per UID) prevents flooding
+- **Rate Limiting**: Token bucket algorithm (50 burst, 200 events/sec per UID) prevents flooding
 
 ### Security & Privacy
 - **Sensitive Data Redaction**: Automatically redact passwords, tokens, API keys from command lines

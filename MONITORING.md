@@ -661,8 +661,8 @@ sudo journalctl -u linmond | grep "reopened"
 # 1. Check event rate
 tail -f /var/log/linmon/events.json | pv -l -i 1 > /dev/null
 
-# 2. If too high, increase rate limiting or add filters
-# eBPF rate limit: 100 events/sec/UID (hardcoded)
+# 2. If too high, add filters to reduce event volume
+# eBPF rate limit: 200 events/sec/UID (50 burst)
 # Reduce by filtering in config
 
 # 3. Disable expensive features
