@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.4] - 2025-12-27
+
+### Fixed
+- **Critical bugfix: process_name extraction** - Fixed `process_name` showing "exe" for processes with manipulated argv[0]
+  - Switched from reading `/proc/<pid>/cmdline` to `readlink(/proc/<pid>/exe)`
+  - Chrome child processes now correctly show `"google-chrome-stable"` instead of `"exe"`
+  - `readlink()` returns actual executable path (not manipulable argv[0])
+  - Works without CAP_SYS_PTRACE (only needs symlink read permission)
+
+### Changed
+- Updated documentation to reflect readlink-based implementation (README.md, CLAUDE.md)
+
+## [1.2.3] - 2025-12-26
+
+### Added
+- **process_name field** - Added to all event types (process, network, file, privilege, security)
+  - Always available for process_exec/process_exit events (from eBPF filename field)
+  - Best-effort for network/privilege/security events (reads /proc/<pid>/exe)
+  - Provides full executable basename without 16-char comm truncation
+  - Fail-safe design: field omitted if unavailable (no crashes or corrupt data)
+- **SELinux support for RHEL/Rocky** - Pre-built binaries now work out-of-the-box
+  - `install.sh` auto-detects SELinux and runs `restorecon` on binaries and directories
+  - Sets correct contexts: `bin_t` for executable, proper log/cache directory contexts
+  - Added comprehensive SELinux troubleshooting guide to INSTALL.md
+
+### Technical
+- `src/logger.c`: Added `get_process_name_from_proc()` function for /proc reading
+- Hidepid detection at startup warns if process_name may be unavailable
+- All logger functions include process_name where applicable
+
+## [1.2.2] - 2025-12-26
+
+### Added
+- **Tamper detection and integrity monitoring**
+  - Event sequence numbers (`seq` field) on all events to detect deleted events
+  - Periodic checkpoints every 30 min with daemon SHA256, config SHA256, uptime
+  - Checkpoints logged to both JSON and syslog/journald (harder to tamper)
+  - Detects: deleted events (seq gaps), binary replacement, config tampering
+- **Integrity hashing**
+  - Daemon binary SHA256 calculated at startup (detects binary replacement)
+  - Config file SHA256 tracked and logged at checkpoints and SIGHUP reload
+  - Recalculated at each checkpoint to detect silent config changes
+
+### Changed
+- All events now include monotonic `seq` field for tamper detection
+- Daemon lifecycle events include integrity hashes (daemon_start, daemon_reload, daemon_shutdown)
+- SIGHUP reload now logs config hash before/after (audit trail)
+
+### Technical
+- `src/logger.c`: Added event_sequence counter and event_count tracking
+- `src/main.c`: Checkpoint logic, daemon/config hash calculation
+- `src/config.c`: Added `checkpoint_interval` option (default: 30 minutes)
+
 ## [1.1.2] - 2025-12-25
 
 ### Fixed
