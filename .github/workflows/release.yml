@@ -1,0 +1,189 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ubuntu:
+    name: Build on Ubuntu 24.04
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            libelf-dev \
+            libbpf-dev \
+            linux-tools-generic \
+            libssl-dev \
+            libcap-dev \
+            zlib1g-dev
+
+      - name: Generate vmlinux.h
+        run: |
+          BPFTOOL=$(find /usr/lib/linux-tools -name bpftool -type f 2>/dev/null | head -1)
+          if [ -z "$BPFTOOL" ]; then
+            echo "Error: bpftool not found"
+            exit 1
+          fi
+          sudo $BPFTOOL btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h
+
+      - name: Build
+        run: make clean && make
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp build/linmond dist/
+          cp linmond.service dist/
+          cp linmond.logrotate dist/
+          cp linmon.conf.example dist/
+          cp README.md dist/
+          cp LICENSE dist/
+          cd dist
+          tar -czf ../linmond-ubuntu-24.04-amd64.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linmond-ubuntu-24.04-amd64
+          path: linmond-ubuntu-24.04-amd64.tar.gz
+
+  build-rhel9:
+    name: Build on RHEL 9 (Rocky Linux)
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+
+    steps:
+      - name: Install Git
+        run: |
+          dnf install -y git
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Enable CRB repository
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled crb
+
+      - name: Install dependencies
+        run: |
+          dnf install -y \
+            clang \
+            llvm \
+            elfutils-libelf-devel \
+            libbpf-devel \
+            bpftool \
+            openssl-devel \
+            libcap-devel \
+            zlib-devel \
+            make \
+            kernel-devel
+
+      - name: Generate vmlinux.h
+        run: |
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h || \
+          echo "Warning: Could not generate vmlinux.h from BTF, using fallback"
+
+      - name: Build
+        run: make clean && make
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp build/linmond dist/
+          cp linmond.service dist/
+          cp linmond.logrotate dist/
+          cp linmon.conf.example dist/
+          cp README.md dist/
+          cp LICENSE dist/
+          cd dist
+          tar -czf ../linmond-rhel9-x86_64.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linmond-rhel9-x86_64
+          path: linmond-rhel9-x86_64.tar.gz
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-ubuntu, build-rhel9]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Ubuntu artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linmond-ubuntu-24.04-amd64
+
+      - name: Download RHEL artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linmond-rhel9-x86_64
+
+      - name: Read VERSION file
+        id: version
+        run: echo "version=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: LinMon v${{ steps.version.outputs.version }}
+          body: |
+            # LinMon v${{ steps.version.outputs.version }}
+
+            Linux Activity Monitor - eBPF-based system monitoring
+
+            ## Downloads
+
+            - **Ubuntu 24.04**: `linmond-ubuntu-24.04-amd64.tar.gz`
+            - **RHEL 9 / Rocky Linux 9**: `linmond-rhel9-x86_64.tar.gz`
+
+            ## Installation
+
+            ```bash
+            # Download and extract
+            tar -xzf linmond-*.tar.gz
+            cd linmond
+
+            # Install (requires root)
+            sudo cp linmond /usr/local/sbin/
+            sudo cp linmond.service /etc/systemd/system/
+            sudo cp linmond.logrotate /etc/logrotate.d/linmond
+            sudo mkdir -p /etc/linmon /var/log/linmon
+            sudo cp linmon.conf.example /etc/linmon/linmon.conf
+
+            # Enable and start
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now linmond
+            ```
+
+            ## Requirements
+
+            - Linux kernel >= 5.8 with BTF support
+            - Root privileges or `CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`
+
+            See [README.md](https://github.com/espegro/linmon/blob/main/README.md) for full documentation.
+          files: |
+            linmond-ubuntu-24.04-amd64.tar.gz
+            linmond-rhel9-x86_64.tar.gz
+          draft: false
+          prerelease: false

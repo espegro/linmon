@@ -46,6 +46,47 @@ LinMon consists of two main components:
 
 ## Installation
 
+### Pre-built Binaries (Recommended)
+
+Download the latest release for your distribution:
+
+**Ubuntu 24.04**:
+```bash
+# Download latest release
+wget https://github.com/espegro/linmon/releases/latest/download/linmond-ubuntu-24.04-amd64.tar.gz
+
+# Extract
+tar -xzf linmond-ubuntu-24.04-amd64.tar.gz
+
+# Install (requires root)
+cd linmond-ubuntu-24.04-amd64
+sudo cp linmond /usr/local/sbin/
+sudo cp linmond.service /etc/systemd/system/
+sudo cp linmond.logrotate /etc/logrotate.d/linmond
+sudo mkdir -p /etc/linmon /var/log/linmon
+sudo cp linmon.conf.example /etc/linmon/linmon.conf
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable --now linmond
+
+# Verify
+sudo systemctl status linmond
+```
+
+**RHEL 9 / Rocky Linux 9**:
+```bash
+# Download latest release
+wget https://github.com/espegro/linmon/releases/latest/download/linmond-rhel9-x86_64.tar.gz
+
+# Extract and install (same steps as Ubuntu)
+tar -xzf linmond-rhel9-x86_64.tar.gz
+cd linmond-rhel9-x86_64
+# ... (same installation steps as above)
+```
+
+### Build from Source
+
 **Quick Start**:
 ```bash
 # Install dependencies (Ubuntu)
