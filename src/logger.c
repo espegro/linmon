@@ -390,6 +390,17 @@ int logger_log_process_event(const struct process_event *event)
         json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
         fprintf(log_fp, ",\"filename\":\"%s\"", filename_escaped);
 
+        // Extract process_name (basename) from filename
+        const char *process_name = strrchr(event->filename, '/');
+        if (process_name) {
+            process_name++;  // Skip the '/'
+        } else {
+            process_name = event->filename;  // No slash, use full filename
+        }
+        char process_name_escaped[MAX_FILENAME_LEN * 6];
+        json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
+        fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+
         // Hash binary if enabled and this is an exec event
         if (enable_hash_binaries && event->type == EVENT_PROCESS_EXEC) {
             if (filehash_calculate(event->filename, sha256, sizeof(sha256))) {

@@ -157,6 +157,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
   "tty": "pts/0",
   "comm": "git",
   "filename": "/usr/bin/git",
+  "process_name": "git",
   "sha256": "abc123...",
   "package": "git",
   "cmdline": "git status"
@@ -180,6 +181,7 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
   "tty": "",
   "comm": "systemctl",
   "filename": "/usr/bin/systemctl",
+  "process_name": "systemctl",
   "sha256": "def456...",
   "cmdline": "systemctl restart nginx"
 }
@@ -289,6 +291,9 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 | `pgid` | Process Group ID - for job control (pipes, etc.) |
 | `tty` | Terminal name (e.g., "pts/0") - empty for background processes |
 | `username` | Resolved username (requires `resolve_usernames = true`) |
+| `comm` | Process name from kernel (max 16 chars, can be modified by process) |
+| `filename` | Full path to executable (e.g., `/usr/bin/google-chrome-stable`) |
+| `process_name` | Basename of executable (e.g., `google-chrome-stable`) - useful for filtering/aggregation |
 
 ### Filtering Interactive vs Background
 
