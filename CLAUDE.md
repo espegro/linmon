@@ -63,17 +63,16 @@ LinMon adds a `process_name` field to events containing the basename of the exec
 
 **Network, Privilege, Security Events**:
 - eBPF does not capture `filename` (performance optimization - avoids expensive dereferences on hot paths)
-- Userspace reads `/proc/<pid>/cmdline` to get argv[0]
-- `process_name` extracted from argv[0] basename
+- Userspace uses `readlink()` on `/proc/<pid>/exe` symlink to get actual executable path
+- `process_name` extracted from exe path basename
 - **Best-effort availability** - may fail if:
   - `/proc` mounted with `hidepid` option (restricts visibility)
   - Process already terminated when event is logged
   - SELinux/AppArmor blocks `/proc` access
-  - Daemon running as `nobody` cannot read other users' `/proc/<pid>/exe` (requires `CAP_SYS_PTRACE`)
 
 **Implementation** (`src/logger.c:get_process_name_from_proc()`):
-- Opens `/proc/<pid>/cmdline` (world-readable, unlike `/proc/<pid>/exe`)
-- Reads first null-terminated argument (argv[0])
+- Uses `readlink()` on `/proc/<pid>/exe` symlink (no CAP_SYS_PTRACE needed - only symlink read permission)
+- Gets actual executable path (not argv[0] which can be manipulated)
 - Extracts basename using `strrchr()`
 - Returns false on any failure → field omitted from JSON
 - Fail-safe: Events logged without `process_name` if unavailable

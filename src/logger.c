@@ -213,45 +213,37 @@ static inline bool check_fprintf_result(int ret)
     return true;
 }
 
-// Read executable path from /proc/<pid>/cmdline and extract process_name (basename)
-// Uses cmdline instead of exe because it's world-readable (daemon runs as nobody)
+// Read executable path from /proc/<pid>/exe symlink and extract process_name (basename)
+// Uses readlink() which works without CAP_SYS_PTRACE (only needs symlink read permission)
 // Returns true if successful, false otherwise
-// Sets process_name_out to basename of executable path (argv[0])
+// Sets process_name_out to basename of executable path
 static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t size)
 {
     char proc_path[64];
-    char cmdline[PATH_MAX];
-    FILE *fp;
-    size_t len;
+    char exe_path[PATH_MAX];
+    ssize_t len;
 
     if (!process_name_out || size == 0)
         return false;
 
     process_name_out[0] = '\0';
 
-    // Read /proc/<pid>/cmdline (world-readable, unlike /proc/<pid>/exe)
-    snprintf(proc_path, sizeof(proc_path), "/proc/%d/cmdline", pid);
-    fp = fopen(proc_path, "r");
-    if (!fp) {
+    // Read /proc/<pid>/exe symlink
+    // readlink() works without CAP_SYS_PTRACE - only needs symlink read permission
+    snprintf(proc_path, sizeof(proc_path), "/proc/%d/exe", pid);
+    len = readlink(proc_path, exe_path, sizeof(exe_path) - 1);
+    if (len == -1) {
         return false;  // Process may have exited or no permission
     }
 
-    // Read first argument (argv[0]) - null-terminated string
-    len = fread(cmdline, 1, sizeof(cmdline) - 1, fp);
-    fclose(fp);
+    exe_path[len] = '\0';  // readlink() doesn't null-terminate
 
-    if (len == 0) {
-        return false;  // Empty cmdline (kernel thread or zombie)
-    }
-
-    cmdline[len] = '\0';  // Ensure null termination
-
-    // Extract basename from argv[0]
-    const char *basename = strrchr(cmdline, '/');
+    // Extract basename from path
+    const char *basename = strrchr(exe_path, '/');
     if (basename) {
         basename++;  // Skip the '/'
     } else {
-        basename = cmdline;  // No slash, argv[0] is just the name
+        basename = exe_path;  // No slash, use full path
     }
 
     // Copy to output
