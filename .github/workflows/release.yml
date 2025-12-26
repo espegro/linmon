@@ -31,17 +31,10 @@ jobs:
             libcap-dev \
             zlib1g-dev
 
-      - name: Generate vmlinux.h
-        run: |
-          BPFTOOL=$(find /usr/lib/linux-tools -name bpftool -type f 2>/dev/null | head -1)
-          if [ -z "$BPFTOOL" ]; then
-            echo "Error: bpftool not found"
-            exit 1
-          fi
-          sudo $BPFTOOL btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h
-
       - name: Build
-        run: make clean && make
+        run: |
+          echo "Using pre-generated vmlinux.h from repository"
+          make clean && make
 
       - name: Package binary
         run: |
@@ -51,7 +44,6 @@ jobs:
           cp linmond.logrotate dist/
           cp linmon.conf.example dist/
           cp README.md dist/
-          cp LICENSE dist/
           cd dist
           tar -czf ../linmond-ubuntu-24.04-amd64.tar.gz *
 
@@ -94,13 +86,10 @@ jobs:
             make \
             kernel-devel
 
-      - name: Generate vmlinux.h
-        run: |
-          bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h || \
-          echo "Warning: Could not generate vmlinux.h from BTF, using fallback"
-
       - name: Build
-        run: make clean && make
+        run: |
+          echo "Using pre-generated vmlinux.h from repository"
+          make clean && make
 
       - name: Package binary
         run: |
@@ -110,7 +99,6 @@ jobs:
           cp linmond.logrotate dist/
           cp linmon.conf.example dist/
           cp README.md dist/
-          cp LICENSE dist/
           cd dist
           tar -czf ../linmond-rhel9-x86_64.tar.gz *
 
