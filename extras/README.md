@@ -6,11 +6,47 @@ This directory contains configuration examples for integrating LinMon with vario
 
 ```
 extras/
-├── vector/           # Vector.dev configuration (recommended)
-├── clickhouse/       # ClickHouse schema and queries
-├── filebeat/         # Filebeat configuration for ELK stack
-└── splunk/           # Splunk configurations (coming soon)
+├── rsyslog-remote.conf  # Remote syslog forwarding (tamper-resistant logs)
+├── vector/              # Vector.dev configuration (recommended)
+├── clickhouse/          # ClickHouse schema and queries
+├── filebeat/            # Filebeat configuration for ELK stack
+└── splunk/              # Splunk configurations (coming soon)
 ```
+
+## Remote Syslog Forwarding (Tamper Detection)
+
+**Best for**: Tamper-resistant audit trails, compliance, security monitoring
+
+LinMon logs daemon lifecycle events and periodic integrity checkpoints to syslog/journald. Forward these to a remote syslog server for tamper-resistant logging:
+
+```bash
+# Copy the example configuration
+sudo cp extras/rsyslog-remote.conf /etc/rsyslog.d/10-linmon-remote.conf
+
+# Edit to set your remote syslog server
+sudo vi /etc/rsyslog.d/10-linmon-remote.conf
+# Replace: @@remote-syslog-server.example.com:514
+# With your actual server and port
+
+# Restart rsyslog
+sudo systemctl restart rsyslog
+```
+
+**What gets forwarded:**
+- **Daemon lifecycle**: startup, reload (SIGHUP), shutdown with signal sender info
+- **Periodic checkpoints**: Every 30 min with sequence numbers, event counts, SHA256 hashes
+- **Integrity monitoring**: Daemon binary hash, config file hash (detects tampering)
+
+**Why remote syslog?**
+- Attacker who compromises host cannot delete remote logs
+- Sequence numbers detect deleted events (gaps indicate tampering)
+- Integrity hashes detect binary/config replacement
+- Provides independent audit trail for forensics
+
+See **[rsyslog-remote.conf](rsyslog-remote.conf)** for:
+- Complete configuration examples (TCP, UDP, TLS)
+- Tamper detection strategies and example queries
+- Security hardening recommendations
 
 ## Quick Start
 

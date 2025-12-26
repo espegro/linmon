@@ -417,9 +417,10 @@ LinMon logs daemon lifecycle events to both JSON log and syslog/journald. This p
 sudo journalctl -t linmond --since "1 hour ago"
 
 # Example output:
-# linmond[1234]: daemon_start: LinMon v1.0.15 monitoring started
-# linmond[1234]: daemon_reload: signal=1 sender_pid=5678 sender_uid=0 - Configuration reload requested
-# linmond[1234]: daemon_shutdown: signal=15 sender_pid=9012 sender_uid=0 - LinMon terminated by signal
+# linmond[1234]: daemon_start: version=1.2.2 daemon_sha256=abc123... config_sha256=def456... - LinMon monitoring started
+# linmond[1234]: checkpoint: version=1.2.2 seq=12345 events=12345 uptime=1800 daemon_sha256=abc123... config_sha256=def456...
+# linmond[1234]: daemon_reload: signal=1 sender_pid=5678 sender_uid=0 version=1.2.2 daemon_sha256=abc123... config_sha256=789abc... - Configuration reload requested
+# linmond[1234]: daemon_shutdown: signal=15 sender_pid=9012 sender_uid=0 version=1.2.2 daemon_sha256=abc123... config_sha256=def456... - LinMon terminated by signal
 
 # Check who stopped LinMon (signal sender info)
 sudo journalctl -t linmond | grep daemon_shutdown
@@ -429,8 +430,37 @@ Daemon events include:
 - **Signal number**: SIGTERM (15), SIGINT (2), SIGHUP (1)
 - **Sender PID**: Which process sent the signal
 - **Sender UID**: Which user sent the signal (0 = root)
+- **Version**: LinMon daemon version
+- **daemon_sha256**: SHA256 hash of linmond binary (detects binary replacement)
+- **config_sha256**: SHA256 hash of config file (detects unauthorized config changes)
 
-For enhanced security, configure remote syslog forwarding so journal entries are stored off-host.
+Periodic checkpoints (default: every 30 minutes) include:
+- **seq**: Current sequence number (gaps indicate deleted events)
+- **events**: Total event count (mismatch with JSON log = deleted events)
+- **uptime**: Daemon uptime in seconds (gaps in checkpoints = daemon interruptions)
+
+#### Remote Syslog Forwarding
+
+For enhanced security, configure remote syslog forwarding so journal entries are stored off-host:
+
+```bash
+# Copy the example configuration
+sudo cp extras/rsyslog-remote.conf /etc/rsyslog.d/10-linmon-remote.conf
+
+# Edit to set your remote syslog server
+sudo vi /etc/rsyslog.d/10-linmon-remote.conf
+# Replace: @@remote-syslog-server.example.com:514
+# With your actual server and port
+
+# Restart rsyslog
+sudo systemctl restart rsyslog
+```
+
+See **[extras/rsyslog-remote.conf](extras/rsyslog-remote.conf)** for:
+- Complete configuration examples (TCP, UDP, TLS)
+- Tamper detection strategies
+- Example queries for integrity verification
+- Security hardening recommendations
 
 ### Full Syslog Integration
 
