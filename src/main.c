@@ -933,6 +933,7 @@ int main(int argc, char **argv)
     }
 
     // Check if /proc is accessible (detect hidepid mount option)
+    // We test /proc/1/cmdline - if this fails, /proc/<pid>/exe will also fail
     // This affects process_name field availability for network/privilege/security events
     FILE *proc_test = fopen("/proc/1/cmdline", "r");
     if (!proc_test) {
