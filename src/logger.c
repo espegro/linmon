@@ -7,6 +7,7 @@
 #include <time.h>
 #include <errno.h>
 #include <pthread.h>
+#include <limits.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -210,6 +211,53 @@ static inline bool check_fprintf_result(int ret)
     }
 
     return true;
+}
+
+// Read executable path from /proc/<pid>/cmdline and extract process_name (basename)
+// Uses cmdline instead of exe because it's world-readable (daemon runs as nobody)
+// Returns true if successful, false otherwise
+// Sets process_name_out to basename of executable path (argv[0])
+static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t size)
+{
+    char proc_path[64];
+    char cmdline[PATH_MAX];
+    FILE *fp;
+    size_t len;
+
+    if (!process_name_out || size == 0)
+        return false;
+
+    process_name_out[0] = '\0';
+
+    // Read /proc/<pid>/cmdline (world-readable, unlike /proc/<pid>/exe)
+    snprintf(proc_path, sizeof(proc_path), "/proc/%d/cmdline", pid);
+    fp = fopen(proc_path, "r");
+    if (!fp) {
+        return false;  // Process may have exited or no permission
+    }
+
+    // Read first argument (argv[0]) - null-terminated string
+    len = fread(cmdline, 1, sizeof(cmdline) - 1, fp);
+    fclose(fp);
+
+    if (len == 0) {
+        return false;  // Empty cmdline (kernel thread or zombie)
+    }
+
+    cmdline[len] = '\0';  // Ensure null termination
+
+    // Extract basename from argv[0]
+    const char *basename = strrchr(cmdline, '/');
+    if (basename) {
+        basename++;  // Skip the '/'
+    } else {
+        basename = cmdline;  // No slash, argv[0] is just the name
+    }
+
+    // Copy to output
+    strncpy(process_name_out, basename, size - 1);
+    process_name_out[size - 1] = '\0';
+    return (process_name_out[0] != '\0');
 }
 
 // Escape special characters for JSON strings
@@ -514,8 +562,20 @@ int logger_log_file_event(const struct file_event *event)
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
     }
 
-    int ret = fprintf(log_fp, ",\"comm\":\"%s\",\"filename\":\"%s\",\"flags\":%u}\n",
-            comm_escaped, filename_escaped, event->flags);
+    fprintf(log_fp, ",\"comm\":\"%s\",\"filename\":\"%s\"", comm_escaped, filename_escaped);
+
+    // Extract process_name (basename) from filename
+    const char *process_name = strrchr(event->filename, '/');
+    if (process_name) {
+        process_name++;  // Skip the '/'
+    } else {
+        process_name = event->filename;  // No slash, use full filename
+    }
+    char process_name_escaped[MAX_FILENAME_LEN * 6];
+    json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
+    fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+
+    int ret = fprintf(log_fp, ",\"flags\":%u}\n", event->flags);
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -604,9 +664,19 @@ int logger_log_network_event(const struct network_event *event)
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
     }
 
-    int ret = fprintf(log_fp, ",\"comm\":\"%s\",\"saddr\":\"%s\","
+    fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
+
+    // Try to get process_name from /proc/<pid>/exe
+    char process_name[PATH_MAX];
+    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name))) {
+        char process_name_escaped[PATH_MAX * 6];
+        json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
+        fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+    }
+
+    int ret = fprintf(log_fp, ",\"saddr\":\"%s\","
             "\"daddr\":\"%s\",\"sport\":%u,\"dport\":%u}\n",
-            comm_escaped, saddr_str, daddr_str,
+            saddr_str, daddr_str,
             event->sport, event->dport);
 
     pthread_mutex_unlock(&log_mutex);
@@ -693,6 +763,14 @@ int logger_log_privilege_event(const struct privilege_event *event)
             "\"comm\":\"%s\"",
             event->old_gid, event->new_gid,
             comm_escaped);
+
+    // Try to get process_name from /proc/<pid>/exe
+    char process_name[PATH_MAX];
+    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name))) {
+        char process_name_escaped[PATH_MAX * 6];
+        json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
+        fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+    }
 
     if (event->target_comm[0]) {
         json_escape(event->target_comm, target_escaped, sizeof(target_escaped));
@@ -794,6 +872,14 @@ int logger_log_security_event(const struct security_event *event)
     }
 
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
+
+    // Try to get process_name from /proc/<pid>/exe
+    char process_name[PATH_MAX];
+    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name))) {
+        char process_name_escaped[PATH_MAX * 6];
+        json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
+        fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+    }
 
     // Type-specific fields
     if (event->type == EVENT_SECURITY_PTRACE) {

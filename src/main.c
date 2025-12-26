@@ -932,6 +932,17 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    // Check if /proc is accessible (detect hidepid mount option)
+    // This affects process_name field availability for network/privilege/security events
+    FILE *proc_test = fopen("/proc/1/cmdline", "r");
+    if (!proc_test) {
+        fprintf(stderr, "Warning: Cannot read /proc/1/cmdline - process_name field may be unavailable\n");
+        fprintf(stderr, "  This can happen if /proc is mounted with hidepid option\n");
+        fprintf(stderr, "  Process exec events will still have process_name (from eBPF)\n");
+    } else {
+        fclose(proc_test);
+    }
+
     // Calculate daemon binary hash (for tamper detection)
     // Must be done before privilege dropping (need CAP_DAC_READ_SEARCH to read executable)
     if (realpath(argv[0], daemon_binary_path) != NULL) {

@@ -292,8 +292,15 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
 | `tty` | Terminal name (e.g., "pts/0") - empty for background processes |
 | `username` | Resolved username (requires `resolve_usernames = true`) |
 | `comm` | Process name from kernel (max 16 chars, can be modified by process) |
-| `filename` | Full path to executable (e.g., `/usr/bin/google-chrome-stable`) |
-| `process_name` | Basename of executable (e.g., `google-chrome-stable`) - useful for filtering/aggregation |
+| `filename` | Full path to executable (e.g., `/usr/bin/google-chrome-stable`) - only in process_exec events |
+| `process_name` | Basename of executable (e.g., `google-chrome-stable`) - always present in process_exec, best-effort in other events* |
+
+\* **Note on `process_name` availability**: This field is always present in `process_exec` events (from eBPF). For network, privilege, and security events, LinMon reads `/proc/<pid>/cmdline` to extract the process name. This may fail if:
+- `/proc` is mounted with `hidepid` option (restricts visibility of other users' processes)
+- The process has already terminated when the event is logged
+- SELinux/AppArmor policies block `/proc` access
+
+In these cases, the `process_name` field will be omitted from the JSON event (the event is still logged with `comm` field).
 
 ### Filtering Interactive vs Background
 

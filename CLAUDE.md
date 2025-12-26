@@ -52,6 +52,37 @@ Kernel Event → eBPF Program (UID filter, TTY check, rate limiting, CIDR filter
                 JSON Log
 ```
 
+### Process Name Enrichment
+
+LinMon adds a `process_name` field to events containing the basename of the executable. Implementation varies by event type:
+
+**Process Events** (`process_exec`, `process_exit`):
+- `filename` field captured in eBPF from `task_struct->mm->exe_file`
+- `process_name` extracted in userspace via `strrchr(filename, '/')`
+- **Always available** - captured at execution time before process can exit
+
+**Network, Privilege, Security Events**:
+- eBPF does not capture `filename` (performance optimization - avoids expensive dereferences on hot paths)
+- Userspace reads `/proc/<pid>/cmdline` to get argv[0]
+- `process_name` extracted from argv[0] basename
+- **Best-effort availability** - may fail if:
+  - `/proc` mounted with `hidepid` option (restricts visibility)
+  - Process already terminated when event is logged
+  - SELinux/AppArmor blocks `/proc` access
+  - Daemon running as `nobody` cannot read other users' `/proc/<pid>/exe` (requires `CAP_SYS_PTRACE`)
+
+**Implementation** (`src/logger.c:get_process_name_from_proc()`):
+- Opens `/proc/<pid>/cmdline` (world-readable, unlike `/proc/<pid>/exe`)
+- Reads first null-terminated argument (argv[0])
+- Extracts basename using `strrchr()`
+- Returns false on any failure → field omitted from JSON
+- Fail-safe: Events logged without `process_name` if unavailable
+
+**Startup Check** (`src/main.c`):
+- Tests `/proc/1/cmdline` access at daemon startup
+- Warns if inaccessible (hidepid detection)
+- Does not prevent startup - best-effort approach
+
 ### Monitoring Capabilities
 
 LinMon monitors multiple event types:
