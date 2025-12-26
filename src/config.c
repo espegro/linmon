@@ -43,6 +43,7 @@ static void set_defaults(struct linmon_config *config)
     config->pkg_cache_file = NULL;     // Use default path
     config->pkg_cache_size = 10000;    // Default: 10k entries
     config->cache_save_interval = 5;   // Default: save every 5 minutes
+    config->checkpoint_interval = 30;  // Default: checkpoint every 30 minutes
 
     config->ignore_processes = NULL;
     config->only_processes = NULL;
@@ -259,6 +260,14 @@ int load_config(struct linmon_config *config, const char *config_file)
                 continue;
             }
             config->cache_save_interval = (int)val;
+        } else if (strcmp(key, "checkpoint_interval") == 0) {
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 0 || val > 1440) {  // 0 to 1440 minutes (24 hours)
+                fprintf(stderr, "Invalid checkpoint_interval (0-1440 minutes): %s\n", value);
+                continue;
+            }
+            config->checkpoint_interval = (int)val;
         } else if (strcmp(key, "ignore_processes") == 0) {
             if (strlen(value) > 0) {
                 config->ignore_processes = strdup(value);

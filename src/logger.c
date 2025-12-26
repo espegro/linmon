@@ -29,6 +29,11 @@ static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
 static char hostname[256] = {0};  // Cached hostname for multi-host SIEM deployments
 
+// Tamper detection - sequence numbers
+static uint64_t event_sequence = 0;  // Monotonic counter for all events
+static unsigned long event_count = 0;  // Total events logged
+static pthread_mutex_t seq_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // Log rotation settings
 static bool rotation_enabled = false;
 static char rotation_base_path[512] = {0};
@@ -342,13 +347,19 @@ int logger_log_process_event(const struct process_event *event)
         json_escape(sudo_user, sudo_user_escaped, sizeof(sudo_user_escaped));
     }
 
+    // Get sequence number for tamper detection
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
             "\"sid\":%u,\"pgid\":%u,"
             "\"uid\":%u",
-            timestamp, hostname_escaped, event_type, event->pid, event->ppid,
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid,
             event->uid);
 
@@ -476,11 +487,17 @@ int logger_log_file_event(const struct file_event *event)
         json_escape(username, username_escaped, sizeof(username_escaped));
     }
 
+    // Get sequence number for tamper detection
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
-            timestamp, hostname_escaped, event_type, event->pid, event->uid);
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -559,12 +576,18 @@ int logger_log_network_event(const struct network_event *event)
         snprintf(daddr_str, sizeof(daddr_str), "unknown");
     }
 
+    // Get sequence number for tamper detection
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
             "\"uid\":%u",
-            timestamp, hostname_escaped, event_type, event->pid, event->uid);
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -631,12 +654,18 @@ int logger_log_privilege_event(const struct privilege_event *event)
         json_escape(new_username, new_username_escaped, sizeof(new_username_escaped));
     }
 
+    // Get sequence number for tamper detection
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
             "\"old_uid\":%u",
-            timestamp, hostname_escaped, event_type, event->pid,
+            seq, timestamp, hostname_escaped, event_type, event->pid,
             event->old_uid);
 
     if (enable_resolve_usernames) {
@@ -737,11 +766,17 @@ int logger_log_security_event(const struct security_event *event)
         json_escape(username, username_escaped, sizeof(username_escaped));
     }
 
+    // Get sequence number for tamper detection
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
-            timestamp, hostname_escaped, event_type, event->pid, event->uid);
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -823,6 +858,24 @@ FILE *logger_get_fp(void)
 pthread_mutex_t *logger_get_mutex(void)
 {
     return &log_mutex;
+}
+
+uint64_t logger_get_sequence(void)
+{
+    uint64_t seq;
+    pthread_mutex_lock(&seq_mutex);
+    seq = event_sequence;
+    pthread_mutex_unlock(&seq_mutex);
+    return seq;
+}
+
+unsigned long logger_get_event_count(void)
+{
+    unsigned long count;
+    pthread_mutex_lock(&seq_mutex);
+    count = event_count;
+    pthread_mutex_unlock(&seq_mutex);
+    return count;
 }
 
 void logger_cleanup(void)

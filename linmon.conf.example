@@ -216,6 +216,21 @@ verify_packages = false
 # pkg_cache_size = 10000
 
 # ============================================================================
+# TAMPER DETECTION & INTEGRITY MONITORING
+# ============================================================================
+
+# Periodic integrity checkpoint interval (minutes)
+# LinMon logs periodic checkpoints to syslog/journald with:
+#   - Event sequence number and count (detect deleted events)
+#   - LinMon binary SHA256 hash (detect daemon replacement)
+#   - Config file SHA256 hash (detect unauthorized config changes)
+# Checkpoints are logged to both JSON and syslog for tamper detection
+# Range: 0-1440 minutes (0 = disabled, max 24 hours)
+# Default: 30 (checkpoint every 30 minutes)
+# Recommendation: 15-60 minutes depending on security requirements
+checkpoint_interval = 30
+
+# ============================================================================
 # EXAMPLE CONFIGURATIONS
 # ============================================================================
 

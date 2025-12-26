@@ -46,6 +46,9 @@ struct linmon_config {
     int pkg_cache_size;       // Max entries in package cache (default: 10000)
     int cache_save_interval;  // Minutes between periodic cache saves (default: 5, 0=shutdown only)
 
+    // Tamper detection
+    int checkpoint_interval;  // Minutes between integrity checkpoints (default: 30, 0=disabled)
+
     // Process filtering
     char *ignore_processes;   // Comma-separated blacklist
     char *only_processes;     // Comma-separated whitelist

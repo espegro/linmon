@@ -38,6 +38,12 @@ static volatile sig_atomic_t last_signal = 0;
 static volatile pid_t signal_sender_pid = 0;
 static volatile uid_t signal_sender_uid = 0;
 
+// Integrity monitoring - daemon and config hashes
+static char daemon_binary_path[PATH_MAX];
+static char daemon_sha256[SHA256_HEX_LEN] = {0};
+static char config_sha256[SHA256_HEX_LEN] = {0};
+static time_t daemon_start_time = 0;
+
 // Enhanced signal handler with sender information (tamper detection)
 static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
 {
@@ -56,9 +62,11 @@ static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
     }
 }
 
-// Log daemon lifecycle event to both JSON and syslog
+// Log daemon lifecycle event to both JSON and syslog with integrity info
 static void log_daemon_event(const char *event_type, const char *message,
-                              int sig, pid_t sender_pid, uid_t sender_uid)
+                              int sig, pid_t sender_pid, uid_t sender_uid,
+                              const char *version, const char *daemon_hash,
+                              const char *config_hash)
 {
     char timestamp[64];
     struct timespec ts;
@@ -73,10 +81,13 @@ static void log_daemon_event(const char *event_type, const char *message,
 
     // Log to syslog (goes to journald on systemd systems)
     if (sig > 0) {
-        syslog(LOG_WARNING, "%s: signal=%d sender_pid=%d sender_uid=%d - %s",
-               event_type, sig, (int)sender_pid, (int)sender_uid, message);
+        syslog(LOG_WARNING, "%s: signal=%d sender_pid=%d sender_uid=%d "
+                           "version=%s daemon_sha256=%s config_sha256=%s - %s",
+               event_type, sig, (int)sender_pid, (int)sender_uid,
+               version, daemon_hash, config_hash, message);
     } else {
-        syslog(LOG_INFO, "%s: %s", event_type, message);
+        syslog(LOG_INFO, "%s: version=%s daemon_sha256=%s config_sha256=%s - %s",
+               event_type, version, daemon_hash, config_hash, message);
     }
 
     // Also log to JSON if logger is initialized
@@ -86,7 +97,10 @@ static void log_daemon_event(const char *event_type, const char *message,
         pthread_mutex_t *mutex = logger_get_mutex();
         if (mutex) pthread_mutex_lock(mutex);
 
-        fprintf(log_fp, "{\"timestamp\":\"%s\",\"type\":\"%s\"", timestamp, event_type);
+        fprintf(log_fp, "{\"timestamp\":\"%s\",\"type\":\"%s\","
+                       "\"version\":\"%s\",\"daemon_sha256\":\"%s\",\"config_sha256\":\"%s\"",
+                timestamp, event_type, version, daemon_hash, config_hash);
+
         if (sig > 0) {
             const char *sig_name = (sig == SIGTERM) ? "SIGTERM" :
                                    (sig == SIGINT) ? "SIGINT" :
@@ -100,6 +114,31 @@ static void log_daemon_event(const char *event_type, const char *message,
 
         if (mutex) pthread_mutex_unlock(mutex);
     }
+}
+
+// Log periodic checkpoint with integrity info
+static void log_checkpoint_to_syslog(void)
+{
+    uint64_t seq = logger_get_sequence();
+    unsigned long events = logger_get_event_count();
+    long uptime = time(NULL) - daemon_start_time;
+
+    // Recalculate config hash (in case it changed on disk without SIGHUP)
+    char current_config_sha256[SHA256_HEX_LEN];
+    if (!filehash_calculate(config_path, current_config_sha256, sizeof(current_config_sha256))) {
+        strncpy(current_config_sha256, "error", sizeof(current_config_sha256));
+        current_config_sha256[sizeof(current_config_sha256) - 1] = '\0';
+    }
+
+    // Log to syslog
+    syslog(LOG_INFO, "checkpoint: version=%s seq=%lu events=%lu uptime=%ld "
+                     "daemon_sha256=%s config_sha256=%s",
+           LINMON_VERSION, seq, events, uptime,
+           daemon_sha256, current_config_sha256);
+
+    // Also log to JSON
+    log_daemon_event("daemon_checkpoint", "Periodic integrity checkpoint",
+                    0, 0, 0, LINMON_VERSION, daemon_sha256, current_config_sha256);
 }
 
 static void print_usage(const char *progname)
@@ -893,6 +932,31 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    // Calculate daemon binary hash (for tamper detection)
+    // Must be done before privilege dropping (need CAP_DAC_READ_SEARCH to read executable)
+    if (realpath(argv[0], daemon_binary_path) != NULL) {
+        if (!filehash_calculate(daemon_binary_path, daemon_sha256, sizeof(daemon_sha256))) {
+            fprintf(stderr, "Warning: Could not hash daemon binary\n");
+            strncpy(daemon_sha256, "unknown", sizeof(daemon_sha256));
+            daemon_sha256[sizeof(daemon_sha256) - 1] = '\0';
+        }
+    } else {
+        strncpy(daemon_binary_path, argv[0], sizeof(daemon_binary_path));
+        daemon_binary_path[sizeof(daemon_binary_path) - 1] = '\0';
+        strncpy(daemon_sha256, "unknown", sizeof(daemon_sha256));
+        daemon_sha256[sizeof(daemon_sha256) - 1] = '\0';
+    }
+
+    // Calculate config file hash (for tamper detection)
+    if (!filehash_calculate(config_path, config_sha256, sizeof(config_sha256))) {
+        fprintf(stderr, "Warning: Could not hash config file\n");
+        strncpy(config_sha256, "unknown", sizeof(config_sha256));
+        config_sha256[sizeof(config_sha256) - 1] = '\0';
+    }
+
+    // Record daemon start time for uptime tracking
+    daemon_start_time = time(NULL);
+
     // Drop UID/GID to nobody user if running as root
     // IMPORTANT: This must be done BEFORE dropping capabilities
     // (we need CAP_SETUID/CAP_SETGID to change UID/GID)
@@ -948,19 +1012,32 @@ int main(int argc, char **argv)
     // Log daemon startup (tamper detection - visible in syslog/journal)
     char startup_msg[64];
     snprintf(startup_msg, sizeof(startup_msg), "LinMon v%s monitoring started", LINMON_VERSION);
-    log_daemon_event("daemon_start", startup_msg, 0, 0, 0);
+    log_daemon_event("daemon_start", startup_msg, 0, 0, 0,
+                    LINMON_VERSION, daemon_sha256, config_sha256);
 
     // Periodic cache save tracking
     time_t last_cache_save = time(NULL);
     int cache_save_interval = global_config.cache_save_interval * 60;  // Convert to seconds
 
+    // Periodic checkpoint tracking (tamper detection)
+    time_t last_checkpoint = time(NULL);
+    int checkpoint_interval = global_config.checkpoint_interval * 60;  // Convert to seconds
+
     // Main event loop - poll for events
     while (!exiting) {
         // Check for config reload
         if (reload_config) {
+            // Recalculate config hash before reload (tamper detection)
+            char new_config_sha256[SHA256_HEX_LEN];
+            if (!filehash_calculate(config_path, new_config_sha256, sizeof(new_config_sha256))) {
+                strncpy(new_config_sha256, "error", sizeof(new_config_sha256));
+                new_config_sha256[sizeof(new_config_sha256) - 1] = '\0';
+            }
+
             // Log config reload with sender info (tamper detection)
             log_daemon_event("daemon_reload", "Configuration reload requested",
-                            SIGHUP, signal_sender_pid, signal_sender_uid);
+                            SIGHUP, signal_sender_pid, signal_sender_uid,
+                            LINMON_VERSION, daemon_sha256, new_config_sha256);
             printf("\n[SIGHUP] Reloading configuration...\n");
 
             struct linmon_config new_config = {0};
@@ -1033,6 +1110,13 @@ int main(int argc, char **argv)
             cache_save_interval = global_config.cache_save_interval * 60;
             last_cache_save = time(NULL);
 
+            // Update checkpoint interval
+            checkpoint_interval = global_config.checkpoint_interval * 60;
+
+            // Update stored config hash after successful reload
+            strncpy(config_sha256, new_config_sha256, sizeof(config_sha256));
+            config_sha256[sizeof(config_sha256) - 1] = '\0';
+
             reload_config = false;
         }
 
@@ -1058,12 +1142,22 @@ int main(int argc, char **argv)
                 last_cache_save = now;
             }
         }
+
+        // Periodic checkpoint (tamper detection)
+        if (checkpoint_interval > 0) {
+            time_t now = time(NULL);
+            if (now - last_checkpoint >= checkpoint_interval) {
+                log_checkpoint_to_syslog();
+                last_checkpoint = now;
+            }
+        }
     }
 
     // Log shutdown with signal info (tamper detection - who stopped us?)
     if (last_signal > 0) {
         log_daemon_event("daemon_shutdown", "LinMon terminated by signal",
-                        last_signal, signal_sender_pid, signal_sender_uid);
+                        last_signal, signal_sender_pid, signal_sender_uid,
+                        LINMON_VERSION, daemon_sha256, config_sha256);
     }
 
     // Print shutdown statistics
