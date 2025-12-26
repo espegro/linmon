@@ -29,6 +29,14 @@ echo -e "${YELLOW}[1/7]${NC} Creating log directory..."
 mkdir -p /var/log/linmon
 chown nobody:${NOBODY_GROUP} /var/log/linmon
 chmod 0750 /var/log/linmon
+
+# Fix SELinux context for log directory (RHEL/Rocky/Fedora)
+if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
+    if sestatus 2>/dev/null | grep -q "SELinux status:.*enabled"; then
+        restorecon -Rv /var/log/linmon
+    fi
+fi
+
 echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
 
 # 2. Create cache directory for package verification
@@ -36,6 +44,14 @@ echo -e "${YELLOW}[2/7]${NC} Creating cache directory..."
 mkdir -p /var/cache/linmon
 chown nobody:${NOBODY_GROUP} /var/cache/linmon
 chmod 0750 /var/cache/linmon
+
+# Fix SELinux context for cache directory (RHEL/Rocky/Fedora)
+if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
+    if sestatus 2>/dev/null | grep -q "SELinux status:.*enabled"; then
+        restorecon -Rv /var/cache/linmon
+    fi
+fi
+
 echo -e "${GREEN}✓${NC} Cache directory: /var/cache/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
 
 # 3. Create and secure config directory
@@ -64,6 +80,16 @@ fi
 cp build/linmond /usr/local/sbin/
 chown root:root /usr/local/sbin/linmond
 chmod 0755 /usr/local/sbin/linmond
+
+# Fix SELinux context if SELinux is enabled (RHEL/Rocky/Fedora)
+if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
+    if sestatus 2>/dev/null | grep -q "SELinux status:.*enabled"; then
+        echo -e "${YELLOW}[SELinux]${NC} Restoring SELinux context..."
+        restorecon -v /usr/local/sbin/linmond
+        echo -e "${GREEN}✓${NC} SELinux context restored"
+    fi
+fi
+
 echo -e "${GREEN}✓${NC} Installed binary: /usr/local/sbin/linmond"
 
 # 4. Install systemd service

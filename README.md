@@ -83,7 +83,12 @@ wget https://github.com/espegro/linmon/releases/latest/download/linmond-rhel9-x8
 tar -xzf linmond-rhel9-x86_64.tar.gz
 cd linmond-rhel9-x86_64
 # ... (same installation steps as above)
+
+# IMPORTANT: If SELinux is enabled, fix contexts
+sudo restorecon -Rv /usr/local/sbin/linmond /var/log/linmon /var/cache/linmon
 ```
+
+> **Note**: On RHEL/Rocky with SELinux enabled, the binary needs correct SELinux contexts. The installer handles this automatically, but if you encounter issues, see **[INSTALL.md](INSTALL.md)** SELinux section.
 
 ### Build from Source
 

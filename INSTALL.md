@@ -285,20 +285,50 @@ sudo sed 's/nobody nogroup/nobody nobody/' linmond.logrotate > /etc/logrotate.d/
 sudo chmod 0644 /etc/logrotate.d/linmond
 ```
 
-#### 6. SELinux Policy (RHEL/Rocky only)
+#### 6. SELinux Configuration (RHEL/Rocky only)
+
+**IMPORTANT**: The `install.sh` script automatically fixes SELinux contexts using `restorecon` on RHEL/Rocky/Fedora systems. This is usually sufficient.
+
+**If you encounter SELinux denials**, you have two options:
+
+**Option 1: Manual Context Restoration** (Recommended for pre-built binaries):
+```bash
+# Fix SELinux contexts manually
+sudo restorecon -Rv /usr/local/sbin/linmond
+sudo restorecon -Rv /var/log/linmon
+sudo restorecon -Rv /var/cache/linmon
+
+# Verify contexts
+ls -Z /usr/local/sbin/linmond
+# Should show: bin_t or similar executable type
+```
+
+**Option 2: Install SELinux Policy Module** (For advanced users):
 ```bash
 cd selinux
 sudo ./install-selinux.sh
 ```
 
-**What this does**:
+**What the policy module does**:
 - Compiles and installs SELinux policy module
 - Allows `linmond` to use eBPF for system monitoring
-- Required for SELinux enforcing mode
+- Required only if `restorecon` is not sufficient
 
-**Check for denials**:
+**Check for SELinux denials**:
 ```bash
 ausearch -m avc -ts recent | grep linmond
+
+# Alternative:
+sudo journalctl -t audit | grep linmond
+```
+
+**Common denial: eBPF loading blocked**:
+```bash
+# If you see "bpf denied" in audit logs:
+# 1. Verify daemon is running with correct binary
+ls -Z /usr/local/sbin/linmond
+# 2. Check if binary has executable context (bin_t)
+# 3. If not, run: sudo restorecon -v /usr/local/sbin/linmond
 ```
 
 ## Post-Installation
