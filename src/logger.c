@@ -664,6 +664,8 @@ int logger_log_network_event(const struct network_event *event)
         char process_name_escaped[PATH_MAX * 6];
         json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+    } else {
+        fprintf(log_fp, ",\"process_name\":null");
     }
 
     int ret = fprintf(log_fp, ",\"saddr\":\"%s\","
@@ -762,6 +764,8 @@ int logger_log_privilege_event(const struct privilege_event *event)
         char process_name_escaped[PATH_MAX * 6];
         json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+    } else {
+        fprintf(log_fp, ",\"process_name\":null");
     }
 
     if (event->target_comm[0]) {
@@ -871,6 +875,8 @@ int logger_log_security_event(const struct security_event *event)
         char process_name_escaped[PATH_MAX * 6];
         json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+    } else {
+        fprintf(log_fp, ",\"process_name\":null");
     }
 
     // Type-specific fields
