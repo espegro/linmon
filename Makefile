@@ -14,14 +14,17 @@ CLANG := clang
 LLC := llc
 CC := gcc
 
-# Auto-detect bpftool location (different on Ubuntu vs RHEL)
+# Auto-detect bpftool location (different on Ubuntu vs RHEL vs Debian)
 # Try multiple locations in order:
 # 1. System-wide bpftool (RHEL/Fedora style)
-# 2. Ubuntu kernel-specific tools directories
-# 3. Generic /usr/bin or /usr/sbin
+# 2. Debian /usr/sbin/bpftool (Raspberry Pi OS)
+# 3. Ubuntu kernel-specific tools directories
+# 4. Generic /usr/lib search
 BPFTOOL := $(shell \
     if command -v bpftool >/dev/null 2>&1 && bpftool version >/dev/null 2>&1; then \
         command -v bpftool; \
+    elif [ -x /usr/sbin/bpftool ] && /usr/sbin/bpftool version >/dev/null 2>&1; then \
+        echo /usr/sbin/bpftool; \
     elif [ -n "$$(find /usr/lib/linux-tools -name bpftool -type f 2>/dev/null | head -n1)" ]; then \
         find /usr/lib/linux-tools -name bpftool -type f 2>/dev/null | head -n1; \
     elif [ -n "$$(find /usr/lib -name bpftool -type f 2>/dev/null | head -n1)" ]; then \
@@ -40,10 +43,20 @@ ifneq ($(BPFTOOL_TEST),OK)
     $(error bpftool found at $(BPFTOOL) but doesn't work. Check installation.)
 endif
 
+# Auto-detect architecture
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),aarch64)
+    ARCH_DEFINE := -D__TARGET_ARCH_arm64
+else ifeq ($(ARCH),x86_64)
+    ARCH_DEFINE := -D__TARGET_ARCH_x86
+else
+    $(error Unsupported architecture: $(ARCH). Supported: x86_64, aarch64)
+endif
+
 # Flags
 INCLUDES := -I/usr/include -I$(BPF_DIR) -I$(SRC_DIR)
 CFLAGS := -Wall -Wextra -O2 -g $(INCLUDES) -DLINMON_VERSION=\"$(VERSION)\"
-BPF_CFLAGS := -target bpf -D__TARGET_ARCH_x86 -Wall -O2 -g $(INCLUDES)
+BPF_CFLAGS := -target bpf $(ARCH_DEFINE) -Wall -O2 -g $(INCLUDES)
 LDFLAGS := -lbpf -lelf -lz -lpthread -lcrypto -lcap
 
 # Source files
