@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <limits.h>
 
 #include "pkgcache.h"
 
@@ -44,6 +45,64 @@ enum pkg_manager {
 };
 
 static enum pkg_manager detected_pkg_manager = PKG_UNKNOWN;
+
+// UsrMerge detection: -1=unknown, 0=no, 1=yes
+// Modern Debian/Ubuntu use /bin -> /usr/bin symlinks (UsrMerge)
+static int usrmerge_detected = -1;
+
+// Detect if system uses UsrMerge (/bin -> /usr/bin symlink)
+static void detect_usrmerge(void)
+{
+	struct stat st;
+
+	if (usrmerge_detected != -1)
+		return;  // Already detected
+
+	// Check if /bin is a symlink (UsrMerge enabled)
+	if (lstat("/bin", &st) == 0 && S_ISLNK(st.st_mode)) {
+		usrmerge_detected = 1;
+	} else {
+		usrmerge_detected = 0;
+	}
+}
+
+// Normalize path for UsrMerge systems
+// On UsrMerge systems, /usr/bin/foo might not be in dpkg database,
+// but /bin/foo is (because packages install to /bin, which is symlinked)
+// Returns normalized path in buf, or original path if no normalization needed
+static const char *normalize_usrmerge_path(const char *path, char *buf, size_t buflen)
+{
+	detect_usrmerge();
+
+	if (usrmerge_detected != 1)
+		return path;  // Not UsrMerge, use original path
+
+	// Convert /usr/bin/* -> /bin/*
+	if (strncmp(path, "/usr/bin/", 9) == 0) {
+		snprintf(buf, buflen, "/bin%s", path + 8);
+		return buf;
+	}
+
+	// Convert /usr/sbin/* -> /sbin/*
+	if (strncmp(path, "/usr/sbin/", 10) == 0) {
+		snprintf(buf, buflen, "/sbin%s", path + 9);
+		return buf;
+	}
+
+	// Convert /usr/lib/* -> /lib/* (libraries)
+	if (strncmp(path, "/usr/lib/", 9) == 0) {
+		snprintf(buf, buflen, "/lib%s", path + 8);
+		return buf;
+	}
+
+	// Convert /usr/lib64/* -> /lib64/* (RHEL x86_64)
+	if (strncmp(path, "/usr/lib64/", 11) == 0) {
+		snprintf(buf, buflen, "/lib64%s", path + 10);
+		return buf;
+	}
+
+	return path;  // No conversion needed
+}
 
 // Simple hash function (djb2)
 static unsigned int hash_path(const char *path)
@@ -104,96 +163,128 @@ static int escape_path_for_shell(const char *path, char *escaped, size_t escaped
     return 0;
 }
 
+// Helper to try package manager query with a specific path
+// Returns 0 on success with package name in buf, -1 on failure
+static int try_package_query(const char *query_path, char *buf, size_t buflen)
+{
+	FILE *fp;
+	char escaped_path[PKG_PATH_MAX * 4];
+	char cmd[PKG_PATH_MAX * 4 + 64];
+	char line[256];
+	int ret = -1;
+
+	// Escape path to prevent command injection
+	if (escape_path_for_shell(query_path, escaped_path, sizeof(escaped_path)) != 0)
+		return -1;
+
+	// Build command based on package manager
+	if (detected_pkg_manager == PKG_DPKG) {
+		snprintf(cmd, sizeof(cmd), "/usr/bin/dpkg -S '%s' 2>/dev/null", escaped_path);
+	} else if (detected_pkg_manager == PKG_RPM) {
+		snprintf(cmd, sizeof(cmd), "/usr/bin/rpm -qf '%s' 2>/dev/null", escaped_path);
+	} else {
+		return -1;
+	}
+
+	fp = popen(cmd, "r");
+	if (!fp)
+		return -1;
+
+	if (fgets(line, sizeof(line), fp)) {
+		// Remove trailing newline
+		size_t len = strlen(line);
+		if (len > 0 && line[len - 1] == '\n')
+			line[len - 1] = '\0';
+
+		if (detected_pkg_manager == PKG_DPKG) {
+			// Parse "package: /path" format
+			char *colon = strchr(line, ':');
+			if (colon) {
+				*colon = '\0';
+				// Handle diversion messages
+				if (strncmp(line, "diversion", 9) != 0) {
+					strncpy(buf, line, buflen - 1);
+					buf[buflen - 1] = '\0';
+					ret = 0;
+				}
+			}
+		} else if (detected_pkg_manager == PKG_RPM) {
+			// Check if it's an error message
+			if (strncmp(line, "file ", 5) != 0 &&
+			    strncmp(line, "error:", 6) != 0) {
+				// Remove version suffix (keep only package name)
+				// e.g., "coreutils-8.32-1.el9" -> "coreutils"
+				char *dash = line;
+				char *last_dash = NULL;
+				while ((dash = strchr(dash, '-')) != NULL) {
+					// Check if followed by digit (version)
+					if (dash[1] >= '0' && dash[1] <= '9') {
+						last_dash = dash;
+						break;
+					}
+					dash++;
+				}
+				if (last_dash)
+					*last_dash = '\0';
+
+				strncpy(buf, line, buflen - 1);
+				buf[buflen - 1] = '\0';
+				ret = 0;
+			}
+		}
+	}
+
+	pclose(fp);
+	return ret;
+}
+
 // Look up package for a file using package manager
 // Returns package name in buf, or empty string if not from package
+// Handles UsrMerge systems where /usr/bin/foo is hardlinked to /bin/foo
+// but only /bin/foo is in the package database
 static int query_package_manager(const char *path, char *buf, size_t buflen)
 {
-    FILE *fp;
-    char escaped_path[PKG_PATH_MAX * 4];  // Worst case: all single quotes
-    char cmd[PKG_PATH_MAX * 4 + 64];
-    char line[256];
-    int ret = -1;
-    int pclose_status;
+	char normalized_path[PKG_PATH_MAX];
+	char realpath_buf[PKG_PATH_MAX];
+	const char *query_path;
+	int ret;
 
-    buf[0] = '\0';
+	buf[0] = '\0';
 
-    if (detected_pkg_manager == PKG_UNKNOWN)
-        return -ENOTSUP;
+	if (detected_pkg_manager == PKG_UNKNOWN)
+		return -ENOTSUP;
 
-    // Escape path to prevent command injection
-    if (escape_path_for_shell(path, escaped_path, sizeof(escaped_path)) != 0)
-        return -EINVAL;
+	// Strategy for UsrMerge compatibility:
+	// 1. Try normalized path first (/usr/bin/foo -> /bin/foo on UsrMerge)
+	// 2. If that fails, try original path
+	// 3. If that fails, try realpath (resolves symlinks)
 
-    // Build command based on package manager
-    // Use absolute paths to prevent PATH manipulation attacks
-    if (detected_pkg_manager == PKG_DPKG) {
-        // dpkg -S /path/to/file
-        // Output: "package: /path/to/file" or error
-        snprintf(cmd, sizeof(cmd), "/usr/bin/dpkg -S '%s' 2>/dev/null", escaped_path);
-    } else if (detected_pkg_manager == PKG_RPM) {
-        // rpm -qf /path/to/file
-        // Output: "package-version" or error
-        snprintf(cmd, sizeof(cmd), "/usr/bin/rpm -qf '%s' 2>/dev/null", escaped_path);
-    } else {
-        return -ENOTSUP;
-    }
+	// Try 1: Normalized path (handles UsrMerge)
+	query_path = normalize_usrmerge_path(path, normalized_path, sizeof(normalized_path));
+	ret = try_package_query(query_path, buf, buflen);
+	if (ret == 0)
+		return 0;  // Success
 
-    fp = popen(cmd, "r");
-    if (!fp)
-        return -errno;
+	// Try 2: Original path (if different from normalized)
+	if (query_path != path) {
+		ret = try_package_query(path, buf, buflen);
+		if (ret == 0)
+			return 0;  // Success
+	}
 
-    if (fgets(line, sizeof(line), fp)) {
-        // Remove trailing newline
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
+	// Try 3: Realpath fallback (resolves symlinks, handles hardlinks)
+	if (realpath(path, realpath_buf) != NULL) {
+		// Only try if realpath is different from both previous attempts
+		if (strcmp(realpath_buf, path) != 0 &&
+		    strcmp(realpath_buf, query_path) != 0) {
+			ret = try_package_query(realpath_buf, buf, buflen);
+			if (ret == 0)
+				return 0;  // Success
+		}
+	}
 
-        if (detected_pkg_manager == PKG_DPKG) {
-            // Parse "package: /path" format
-            char *colon = strchr(line, ':');
-            if (colon) {
-                *colon = '\0';
-                // Handle diversion messages
-                if (strncmp(line, "diversion", 9) != 0) {
-                    strncpy(buf, line, buflen - 1);
-                    buf[buflen - 1] = '\0';
-                    ret = 0;
-                }
-            }
-        } else if (detected_pkg_manager == PKG_RPM) {
-            // Check if it's an error message
-            if (strncmp(line, "file ", 5) != 0 &&
-                strncmp(line, "error:", 6) != 0) {
-                // Remove version suffix (keep only package name)
-                // e.g., "coreutils-8.32-1.el9" -> "coreutils"
-                char *dash = line;
-                char *last_dash = NULL;
-                while ((dash = strchr(dash, '-')) != NULL) {
-                    // Check if followed by digit (version)
-                    if (dash[1] >= '0' && dash[1] <= '9') {
-                        last_dash = dash;
-                        break;
-                    }
-                    dash++;
-                }
-                if (last_dash)
-                    *last_dash = '\0';
-
-                strncpy(buf, line, buflen - 1);
-                buf[buflen - 1] = '\0';
-                ret = 0;
-            }
-        }
-    }
-
-    pclose_status = pclose(fp);
-    if (pclose_status == -1) {
-        // pclose() failed - don't cache this result
-        return -errno;
-    }
-    // WIFEXITED/WEXITSTATUS could be checked here, but dpkg/rpm
-    // return non-zero for "not found", which is a valid result
-    return ret;
+	// All attempts failed
+	return -1;
 }
 
 // Find or create cache entry

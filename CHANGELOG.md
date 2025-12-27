@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.6] - 2025-12-28
+
+### Fixed
+- **Package verification false positives on UsrMerge systems** - Fixed package detection for hardlinked binaries
+  - Modern Ubuntu/Debian use UsrMerge: `/bin` → `/usr/bin` symlinks
+  - Package manifests only list canonical paths (e.g., `/bin/ss`)
+  - Hardlinks to `/usr/bin/ss` were incorrectly reported as `"package":null`
+  - Implemented UsrMerge-aware path normalization with 3-tier fallback:
+    1. Try normalized path (`/usr/bin/foo` → `/bin/foo`)
+    2. Try original path (for non-UsrMerge systems)
+    3. Try realpath (handles symlinks and hardlinks)
+  - Eliminates false positives for bastion host monitoring
+
+### Technical Details
+- Added `detect_usrmerge()` to check if system uses UsrMerge
+- Added `normalize_usrmerge_path()` for path translation
+- Refactored `query_package_manager()` with `try_package_query()` helper
+- Handles `/usr/bin`, `/usr/sbin`, `/usr/lib`, `/usr/lib64` conversions
+- Example: `/usr/bin/ss` now correctly reports `"package":"iproute2"`
+
 ## [1.2.5] - 2025-12-27
 
 ### Fixed
