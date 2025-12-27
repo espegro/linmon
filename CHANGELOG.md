@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.5] - 2025-12-27
+
+### Fixed
+- **JSON schema consistency** - `process_name` field is now always present in all event types
+  - Previously omitted entirely when `readlink(/proc/<pid>/exe)` failed
+  - Now outputs `"process_name":null` when unavailable (consistent schema)
+  - Affects: network, privilege, and security events
+  - Fixes JSON parser compatibility issues
+
+### Technical Details
+- Short-lived processes (curl, grep) often exit before event is logged
+- Race condition: eBPF event fires → daemon reads /proc → process already gone
+- Field is now: `"process_name":"value"` or `"process_name":null`
+- process_exec events always have process_name (from eBPF filename field)
+
 ## [1.2.4] - 2025-12-27
 
 ### Fixed
