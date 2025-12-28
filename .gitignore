@@ -27,3 +27,7 @@ startup
 
 # Claude Code
 .claude/
+
+# Release signing artifacts
+SHA256SUMS
+SHA256SUMS.asc
