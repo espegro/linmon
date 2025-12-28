@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2025-12-28
+
+### Added
+- **vsock monitoring support** - Monitor VM-to-host and container-to-host communication via Virtual Sockets
+  - New config option: `monitor_vsock` (default: false)
+  - Detects communication between VMs/containers and host system
+  - Critical for detecting container escape attempts (MITRE ATT&CK T1611)
+  - Useful for detecting VM-based C2 communication and lateral movement
+  - New event type: `net_vsock_connect` with CID (Context ID) and port information
+
+### Technical Details
+- Added `AF_VSOCK` constant and `EVENT_NET_VSOCK_CONNECT` event type
+- Implemented eBPF kprobe on `vsock_connect()` kernel function
+- Reuses existing `network_event` structure (CIDs stored in address fields)
+- Logger handles AF_VSOCK family to format CIDs as decimal numbers
+- Conditional probe attachment based on `monitor_vsock` config option
+
+### Security Use Cases
+- **Container escape detection**: Detect unauthorized vsock communication from containers
+- **VM-to-host monitoring**: Track which VMs communicate with host services
+- **Lateral movement**: Identify suspicious cross-VM communication patterns
+- **C2 detection**: Detect malware using vsock for command and control
+
+### Event Example
+```json
+{
+  "type": "net_vsock_connect",
+  "pid": 1234,
+  "ppid": 1000,
+  "uid": 1000,
+  "comm": "suspicious_app",
+  "saddr": "3",
+  "daddr": "2",
+  "sport": 12345,
+  "dport": 2049,
+  "family": 40
+}
+```
+
+In this example, a process in VM with CID 3 is connecting to host (CID 2) on port 2049.
+
+### Configuration
+Add to `/etc/linmon/linmon.conf` to enable:
+```
+monitor_vsock = true
+```
+
 ## [1.2.7] - 2025-12-28
 
 ### Added

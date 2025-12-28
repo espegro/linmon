@@ -26,6 +26,7 @@
 #ifdef __BPF__
 #define AF_INET     2
 #define AF_INET6    10
+#define AF_VSOCK    40
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #endif
@@ -63,6 +64,7 @@ enum event_type {
     EVENT_PRIV_SUDO = 11,
     EVENT_NET_SEND_UDP = 12,
     EVENT_NET_RECV_UDP = 13,
+    EVENT_NET_VSOCK_CONNECT = 23,  // VM/container socket communication
     // Security monitoring events (MITRE ATT&CK detection)
     EVENT_SECURITY_PTRACE = 14,   // T1055 - Process Injection
     EVENT_SECURITY_MODULE = 15,   // T1547.006 - Kernel Module Loading
@@ -128,12 +130,12 @@ struct network_event {
     __u32 pgid;
     char tty[16];
     char comm[TASK_COMM_LEN];
-    __u8 saddr[16];  // IPv4 or IPv6 source address (IPv4 uses first 4 bytes)
-    __u8 daddr[16];  // IPv4 or IPv6 destination address
+    __u8 saddr[16];  // IPv4/IPv6 source address (IPv4 uses first 4 bytes) OR vsock source CID
+    __u8 daddr[16];  // IPv4/IPv6 destination address OR vsock destination CID
     __u16 sport;
     __u16 dport;
-    __u16 family;    // AF_INET or AF_INET6
-    __u8 protocol;   // TCP, UDP, etc
+    __u16 family;    // AF_INET, AF_INET6, or AF_VSOCK
+    __u8 protocol;   // TCP, UDP (not used for AF_VSOCK)
 };
 
 struct privilege_event {

@@ -26,6 +26,7 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_files = false;
     config->monitor_tcp = true;
     config->monitor_udp = false;  // Default: off (can be very noisy)
+    config->monitor_vsock = false;  // Default: off (VM/container communication)
     config->verbosity = 1;
     config->min_uid = 0;     // Default: monitor all users including root
     config->max_uid = 0;     // 0 = no limit
@@ -161,6 +162,8 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->monitor_tcp = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_udp") == 0) {
             config->monitor_udp = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_vsock") == 0) {
+            config->monitor_vsock = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_network") == 0) {
             // Legacy support: monitor_network sets both TCP and UDP
             bool val = (strcmp(value, "true") == 0);

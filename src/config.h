@@ -20,6 +20,7 @@ struct linmon_config {
     bool monitor_files;
     bool monitor_tcp;
     bool monitor_udp;
+    bool monitor_vsock;         // Monitor vsock (VM/container communication)
     int verbosity;
 
     // UID/GID filtering

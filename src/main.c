@@ -323,6 +323,24 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         break;
     }
 
+    case EVENT_NET_VSOCK_CONNECT: {
+        // Check if vsock monitoring is enabled
+        if (!global_config.monitor_vsock)
+            return 0;
+
+        if (data_sz < sizeof(struct network_event)) {
+            fprintf(stderr, "Invalid network event size: %zu\n", data_sz);
+            return 0;
+        }
+        struct network_event *e = data;
+
+        if (!filter_should_log_process(e->comm))
+            return 0;
+
+        logger_log_network_event(e);
+        break;
+    }
+
     case EVENT_PRIV_SETUID:
     case EVENT_PRIV_SETGID:
     case EVENT_PRIV_SUDO: {
@@ -660,6 +678,15 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         failed_count++;
     } else {
         printf("  ✓ UDPv6 send monitoring\n");
+        attached_count++;
+    }
+
+    link = bpf_program__attach(skel->progs.vsock_connect_enter);
+    if (libbpf_get_error(link)) {
+        fprintf(stderr, "  ✗ vsock connect monitoring failed\n");
+        failed_count++;
+    } else {
+        printf("  ✓ vsock (VM/container) connect monitoring\n");
         attached_count++;
     }
 

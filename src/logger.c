@@ -621,6 +621,9 @@ int logger_log_network_event(const struct network_event *event)
     case EVENT_NET_SEND_UDP:
         event_type = "net_send_udp";
         break;
+    case EVENT_NET_VSOCK_CONNECT:
+        event_type = "net_vsock_connect";
+        break;
     default:
         event_type = "net_unknown";
     }
@@ -645,6 +648,13 @@ int logger_log_network_event(const struct network_event *event)
         // IPv6 - use all 16 bytes
         inet_ntop(AF_INET6, event->saddr, saddr_str, sizeof(saddr_str));
         inet_ntop(AF_INET6, event->daddr, daddr_str, sizeof(daddr_str));
+    } else if (event->family == 40) {  // AF_VSOCK
+        // vsock - CID (Context ID) stored in first 4 bytes
+        uint32_t scid, dcid;
+        memcpy(&scid, event->saddr, 4);
+        memcpy(&dcid, event->daddr, 4);
+        snprintf(saddr_str, sizeof(saddr_str), "%u", scid);
+        snprintf(daddr_str, sizeof(daddr_str), "%u", dcid);
     } else {
         snprintf(saddr_str, sizeof(saddr_str), "unknown");
         snprintf(daddr_str, sizeof(daddr_str), "unknown");

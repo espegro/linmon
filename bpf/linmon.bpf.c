@@ -1034,6 +1034,78 @@ int BPF_KPROBE(udpv6_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t 
 }
 
 // ============================================================================
+// VSOCK MONITORING (VM/Container Communication)
+// ============================================================================
+
+SEC("kprobe/vsock_connect")
+int BPF_KPROBE(vsock_connect_enter, struct socket *sock, struct sockaddr *addr, int addr_len)
+{
+    __u32 uid = bpf_get_current_uid_gid();
+    struct network_event *event;
+    struct task_struct *task;
+    struct sock *sk;
+    __u16 family;
+
+    if (!should_monitor_uid(uid))
+        return 0;
+
+    // Rate limiting
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Read socket pointer
+    sk = BPF_CORE_READ(sock, sk);
+    if (!sk)
+        return 0;
+
+    family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    if (family != AF_VSOCK)
+        return 0;
+
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    task = (struct task_struct *)bpf_get_current_task();
+
+    event->type = EVENT_NET_VSOCK_CONNECT;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
+
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+
+    event->family = AF_VSOCK;
+    event->protocol = 0;  // vsock doesn't use protocol field
+
+    // For vsock: CID (Context ID) is like an IP address, port is like TCP/UDP port
+    // Read local CID and port from socket
+    __u32 local_cid = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);  // Local CID
+    __u32 remote_cid = BPF_CORE_READ(sk, __sk_common.skc_daddr);     // Remote CID
+
+    // Store CIDs in first 4 bytes of address fields
+    __builtin_memcpy(event->saddr, &local_cid, 4);
+    __builtin_memcpy(event->daddr, &remote_cid, 4);
+
+    // Read ports
+    event->sport = BPF_CORE_READ(sk, __sk_common.skc_num);
+    __u16 dport_be = BPF_CORE_READ(sk, __sk_common.skc_dport);
+    event->dport = __bpf_ntohs(dport_be);
+
+    // Skip if destination CID is not set (0)
+    if (remote_cid == 0) {
+        bpf_ringbuf_discard(event, 0);
+        return 0;
+    }
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+// ============================================================================
 // PRIVILEGE ESCALATION MONITORING
 // ============================================================================
 
