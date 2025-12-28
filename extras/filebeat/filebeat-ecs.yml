@@ -1,0 +1,550 @@
+# Filebeat configuration for LinMon with ECS (Elastic Common Schema) transformation
+# https://www.elastic.co/guide/en/beats/filebeat/current/index.html
+# https://www.elastic.co/guide/en/ecs/current/index.html
+#
+# This configuration reads LinMon JSON events and transforms them to ECS format
+# for optimal integration with Elasticsearch, Kibana, and Elastic Security.
+#
+# Installation:
+#   Ubuntu: sudo apt-get install filebeat
+#   RHEL:   sudo yum install filebeat
+#
+# Usage:
+#   sudo cp extras/filebeat/filebeat-ecs.yml /etc/filebeat/filebeat.yml
+#   sudo systemctl restart filebeat
+
+# ==============================================================================
+# Filebeat Inputs
+# ==============================================================================
+
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/linmon/events.json
+      - /var/log/linmon/events.json.*  # Include rotated logs
+
+    # Parse as JSON
+    json.keys_under_root: false  # Keep original under "linmon" namespace
+    json.add_error_key: true
+    json.message_key: message
+
+    # Fields to add to every event
+    fields:
+      log_type: linmon
+      environment: production  # Change as needed
+
+    # Multiline settings (not needed for LinMon - each event is one line)
+    multiline.type: count
+    multiline.count_lines: 1
+
+# ==============================================================================
+# Filebeat Modules (disabled - we use custom input)
+# ==============================================================================
+
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+# ==============================================================================
+# ECS Transformation Processors
+# ==============================================================================
+
+processors:
+  # 1. Parse timestamp field to @timestamp
+  - timestamp:
+      field: timestamp
+      target_field: '@timestamp'
+      layouts:
+        - '2006-01-02T15:04:05.999Z'
+      ignore_missing: true
+
+  # 2. Map LinMon fields to ECS using script processor
+  - script:
+      lang: javascript
+      source: >
+        function process(event) {
+          // Get LinMon event type
+          var type = event.Get("type");
+          if (!type) return;
+
+          // Map event.action (LinMon type → ECS action)
+          event.Put("event.action", type);
+          event.Put("event.module", "linmon");
+          event.Put("event.dataset", "linmon.events");
+
+          // Map event.kind based on type
+          if (type.startsWith("security_")) {
+            event.Put("event.kind", "alert");
+          } else {
+            event.Put("event.kind", "event");
+          }
+
+          // Map event.category and event.type based on LinMon type
+          if (type.startsWith("process_")) {
+            event.Put("event.category", ["process"]);
+            if (type === "process_exec") {
+              event.Put("event.type", ["start", "process_start"]);
+            } else if (type === "process_exit") {
+              event.Put("event.type", ["end", "process_end"]);
+            }
+          } else if (type.startsWith("file_")) {
+            event.Put("event.category", ["file"]);
+            if (type === "file_create") {
+              event.Put("event.type", ["creation"]);
+            } else if (type === "file_modify") {
+              event.Put("event.type", ["change"]);
+            } else if (type === "file_delete") {
+              event.Put("event.type", ["deletion"]);
+            }
+          } else if (type.startsWith("net_")) {
+            event.Put("event.category", ["network"]);
+            if (type.includes("connect")) {
+              event.Put("event.type", ["connection", "start"]);
+            } else if (type.includes("accept")) {
+              event.Put("event.type", ["connection", "start"]);
+            } else if (type.includes("send")) {
+              event.Put("event.type", ["protocol"]);
+            }
+          } else if (type.startsWith("priv_")) {
+            event.Put("event.category", ["authentication", "iam"]);
+            event.Put("event.type", ["change"]);
+          } else if (type.startsWith("security_")) {
+            event.Put("event.category", ["intrusion_detection", "malware"]);
+            event.Put("event.type", ["indicator"]);
+          }
+
+          // Map event.sequence
+          var seq = event.Get("seq");
+          if (seq) {
+            event.Put("event.sequence", seq);
+          }
+
+          // Map host fields
+          var hostname = event.Get("hostname");
+          if (hostname) {
+            event.Put("host.hostname", hostname);
+            event.Put("host.name", hostname);
+          }
+
+          // Map process fields
+          var pid = event.Get("pid");
+          if (pid) event.Put("process.pid", pid);
+
+          var ppid = event.Get("ppid");
+          if (ppid) event.Put("process.parent.pid", ppid);
+
+          var sid = event.Get("sid");
+          if (sid) event.Put("process.session_leader.pid", sid);
+
+          var pgid = event.Get("pgid");
+          if (pgid) event.Put("process.group_leader.pid", pgid);
+
+          var comm = event.Get("comm");
+          if (comm) event.Put("process.name", comm);
+
+          var process_name = event.Get("process_name");
+          if (process_name) event.Put("process.executable", process_name);
+
+          var filename = event.Get("filename");
+          if (filename) {
+            event.Put("process.executable", filename);
+            event.Put("file.path", filename);
+          }
+
+          var cmdline = event.Get("cmdline");
+          if (cmdline) event.Put("process.command_line", cmdline);
+
+          var sha256 = event.Get("sha256");
+          if (sha256) event.Put("process.hash.sha256", sha256);
+
+          var package_name = event.Get("package");
+          if (package_name) {
+            event.Put("package.name", package_name);
+            // Also store in process for package verification
+            event.Put("process.code_signature.subject_name", package_name);
+          }
+
+          var pkg_modified = event.Get("pkg_modified");
+          if (pkg_modified === true) {
+            event.Put("process.code_signature.valid", false);
+          } else if (package_name) {
+            event.Put("process.code_signature.valid", true);
+          }
+
+          var tty = event.Get("tty");
+          if (tty) event.Put("process.interactive", tty !== "");
+
+          // Map user fields
+          var uid = event.Get("uid");
+          if (uid !== null && uid !== undefined) {
+            event.Put("user.id", uid.toString());
+          }
+
+          var username = event.Get("username");
+          if (username) event.Put("user.name", username);
+
+          var gid = event.Get("gid");
+          if (gid !== null && gid !== undefined) {
+            event.Put("user.group.id", gid.toString());
+          }
+
+          var sudo_uid = event.Get("sudo_uid");
+          if (sudo_uid !== null && sudo_uid !== undefined) {
+            event.Put("user.effective.id", sudo_uid.toString());
+          }
+
+          var sudo_user = event.Get("sudo_user");
+          if (sudo_user) event.Put("user.effective.name", sudo_user);
+
+          // Map network fields
+          var saddr = event.Get("saddr");
+          if (saddr) event.Put("source.ip", saddr);
+
+          var daddr = event.Get("daddr");
+          if (daddr) event.Put("destination.ip", daddr);
+
+          var sport = event.Get("sport");
+          if (sport) event.Put("source.port", sport);
+
+          var dport = event.Get("dport");
+          if (dport) event.Put("destination.port", dport);
+
+          var family = event.Get("family");
+          if (family === 2) {
+            event.Put("network.type", "ipv4");
+          } else if (family === 10) {
+            event.Put("network.type", "ipv6");
+          } else if (family === 40) {
+            event.Put("network.type", "vsock");
+          }
+
+          var protocol = event.Get("protocol");
+          if (protocol === 6) {
+            event.Put("network.transport", "tcp");
+          } else if (protocol === 17) {
+            event.Put("network.transport", "udp");
+          }
+
+          // Map file fields (for file events)
+          var path = event.Get("path");
+          if (path) event.Put("file.path", path);
+
+          var inode = event.Get("inode");
+          if (inode) event.Put("file.inode", inode.toString());
+
+          // Map MITRE ATT&CK techniques
+          var mitre_map = {
+            "security_ptrace": { id: "T1055", name: "Process Injection" },
+            "security_module_load": { id: "T1547.006", name: "Kernel Modules and Extensions" },
+            "security_memfd_create": { id: "T1620", name: "Reflective Code Loading" },
+            "security_execveat": { id: "T1620", name: "Reflective Code Loading" },
+            "security_bind": { id: "T1571", name: "Non-Standard Port" },
+            "security_unshare": { id: "T1611", name: "Escape to Host" },
+            "security_bpf": { id: "T1014", name: "Rootkit" },
+            "security_cred_read": { id: "T1003.008", name: "OS Credential Dumping: /etc/passwd and /etc/shadow" },
+            "security_ldpreload": { id: "T1574.006", name: "Dynamic Linker Hijacking" }
+          };
+
+          if (mitre_map[type]) {
+            event.Put("threat.framework", "MITRE ATT&CK");
+            event.Put("threat.technique.id", mitre_map[type].id);
+            event.Put("threat.technique.name", mitre_map[type].name);
+            event.Put("threat.tactic.name", getTacticFromTechnique(mitre_map[type].id));
+          }
+
+          // Helper function to map technique to tactic
+          function getTacticFromTechnique(technique_id) {
+            var tactic_map = {
+              "T1055": "Defense Evasion",
+              "T1547.006": "Persistence",
+              "T1620": "Defense Evasion",
+              "T1571": "Command and Control",
+              "T1611": "Privilege Escalation",
+              "T1014": "Defense Evasion",
+              "T1003.008": "Credential Access",
+              "T1574.006": "Persistence"
+            };
+            return tactic_map[technique_id] || "Unknown";
+          }
+        }
+
+  # 3. Add host metadata
+  - add_host_metadata:
+      when.not.has_fields: ['agent.hostname']
+      netinfo.enabled: true
+
+  # 4. Add cloud metadata (if running in cloud)
+  - add_cloud_metadata: ~
+
+  # 5. Add Docker metadata (if running in containers)
+  - add_docker_metadata: ~
+
+  # 6. Rename original LinMon fields to preserve them under "linmon" namespace
+  - rename:
+      fields:
+        - {from: "type", to: "linmon.type"}
+        - {from: "timestamp", to: "linmon.timestamp"}
+        - {from: "seq", to: "linmon.seq"}
+        - {from: "hostname", to: "linmon.hostname"}
+        - {from: "pid", to: "linmon.pid"}
+        - {from: "ppid", to: "linmon.ppid"}
+        - {from: "sid", to: "linmon.sid"}
+        - {from: "pgid", to: "linmon.pgid"}
+        - {from: "uid", to: "linmon.uid"}
+        - {from: "gid", to: "linmon.gid"}
+        - {from: "username", to: "linmon.username"}
+        - {from: "comm", to: "linmon.comm"}
+        - {from: "cmdline", to: "linmon.cmdline"}
+        - {from: "filename", to: "linmon.filename"}
+        - {from: "process_name", to: "linmon.process_name"}
+        - {from: "sha256", to: "linmon.sha256"}
+        - {from: "package", to: "linmon.package"}
+        - {from: "pkg_modified", to: "linmon.pkg_modified"}
+        - {from: "tty", to: "linmon.tty"}
+        - {from: "sudo_uid", to: "linmon.sudo_uid"}
+        - {from: "sudo_user", to: "linmon.sudo_user"}
+        - {from: "saddr", to: "linmon.saddr"}
+        - {from: "daddr", to: "linmon.daddr"}
+        - {from: "sport", to: "linmon.sport"}
+        - {from: "dport", to: "linmon.dport"}
+        - {from: "family", to: "linmon.family"}
+        - {from: "protocol", to: "linmon.protocol"}
+        - {from: "path", to: "linmon.path"}
+        - {from: "inode", to: "linmon.inode"}
+      ignore_missing: true
+      fail_on_error: false
+
+  # 7. Drop internal Filebeat fields
+  - drop_fields:
+      fields: ["agent.ephemeral_id", "input.type", "log.offset"]
+      ignore_missing: true
+
+# ==============================================================================
+# Output: Elasticsearch
+# ==============================================================================
+
+output.elasticsearch:
+  enabled: true
+  hosts: ["localhost:9200"]
+
+  # Use ECS-compatible index pattern
+  index: "linmon-ecs-%{+yyyy.MM.dd}"
+
+  # Or use data streams (Elasticsearch 7.9+, recommended)
+  # allow_older_versions: false
+
+  # Authentication
+  username: "elastic"
+  password: "${ELASTICSEARCH_PASSWORD}"
+
+  # SSL/TLS settings
+  # ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
+  # ssl.certificate: "/etc/pki/client/cert.pem"
+  # ssl.key: "/etc/pki/client/cert.key"
+
+  # Use ILM (Index Lifecycle Management) for automatic rollover
+  ilm.enabled: true
+  ilm.rollover_alias: "linmon-ecs"
+  ilm.pattern: "{now/d}-000001"
+
+  # Bulk settings
+  bulk_max_size: 1000
+  worker: 2
+
+# ==============================================================================
+# Output: Logstash (alternative to Elasticsearch)
+# ==============================================================================
+# Uncomment to send to Logstash instead of Elasticsearch
+
+# output.logstash:
+#   enabled: true
+#   hosts: ["localhost:5044"]
+#
+#   # SSL/TLS settings
+#   # ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
+#   # ssl.certificate: "/etc/pki/client/cert.pem"
+#   # ssl.key: "/etc/pki/client/cert.key"
+#
+#   # Bulk settings
+#   bulk_max_size: 2048
+#   worker: 2
+
+# ==============================================================================
+# Logging
+# ==============================================================================
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# ==============================================================================
+# Internal Queue Settings
+# ==============================================================================
+
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 1s
+
+# ==============================================================================
+# Monitoring (send Filebeat metrics to Elasticsearch)
+# ==============================================================================
+
+monitoring.enabled: false
+# monitoring.elasticsearch:
+#   hosts: ["localhost:9200"]
+#   username: "elastic"
+#   password: "${ELASTICSEARCH_PASSWORD}"
+
+# ==============================================================================
+# Example Elasticsearch Index Template for ECS
+# ==============================================================================
+# The default ECS template should work, but you can customize:
+#
+# PUT _index_template/linmon-ecs
+# {
+#   "index_patterns": ["linmon-ecs-*"],
+#   "template": {
+#     "settings": {
+#       "number_of_shards": 1,
+#       "number_of_replicas": 1,
+#       "index.refresh_interval": "5s"
+#     },
+#     "mappings": {
+#       "properties": {
+#         "@timestamp": { "type": "date" },
+#         "event": {
+#           "properties": {
+#             "action": { "type": "keyword" },
+#             "category": { "type": "keyword" },
+#             "type": { "type": "keyword" },
+#             "kind": { "type": "keyword" },
+#             "module": { "type": "keyword" },
+#             "dataset": { "type": "keyword" },
+#             "sequence": { "type": "long" }
+#           }
+#         },
+#         "host": {
+#           "properties": {
+#             "hostname": { "type": "keyword" },
+#             "name": { "type": "keyword" }
+#           }
+#         },
+#         "process": {
+#           "properties": {
+#             "pid": { "type": "long" },
+#             "name": { "type": "keyword" },
+#             "executable": { "type": "keyword" },
+#             "command_line": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+#             "parent": {
+#               "properties": {
+#                 "pid": { "type": "long" }
+#               }
+#             },
+#             "session_leader": {
+#               "properties": {
+#                 "pid": { "type": "long" }
+#               }
+#             },
+#             "group_leader": {
+#               "properties": {
+#                 "pid": { "type": "long" }
+#               }
+#             },
+#             "hash": {
+#               "properties": {
+#                 "sha256": { "type": "keyword" }
+#               }
+#             },
+#             "code_signature": {
+#               "properties": {
+#                 "subject_name": { "type": "keyword" },
+#                 "valid": { "type": "boolean" }
+#               }
+#             },
+#             "interactive": { "type": "boolean" }
+#           }
+#         },
+#         "user": {
+#           "properties": {
+#             "id": { "type": "keyword" },
+#             "name": { "type": "keyword" },
+#             "group": {
+#               "properties": {
+#                 "id": { "type": "keyword" }
+#               }
+#             },
+#             "effective": {
+#               "properties": {
+#                 "id": { "type": "keyword" },
+#                 "name": { "type": "keyword" }
+#               }
+#             }
+#           }
+#         },
+#         "source": {
+#           "properties": {
+#             "ip": { "type": "ip" },
+#             "port": { "type": "long" }
+#           }
+#         },
+#         "destination": {
+#           "properties": {
+#             "ip": { "type": "ip" },
+#             "port": { "type": "long" }
+#           }
+#         },
+#         "network": {
+#           "properties": {
+#             "type": { "type": "keyword" },
+#             "transport": { "type": "keyword" }
+#           }
+#         },
+#         "file": {
+#           "properties": {
+#             "path": { "type": "keyword" },
+#             "inode": { "type": "keyword" }
+#           }
+#         },
+#         "threat": {
+#           "properties": {
+#             "framework": { "type": "keyword" },
+#             "technique": {
+#               "properties": {
+#                 "id": { "type": "keyword" },
+#                 "name": { "type": "keyword" }
+#               }
+#             },
+#             "tactic": {
+#               "properties": {
+#                 "name": { "type": "keyword" }
+#               }
+#             }
+#           }
+#         },
+#         "package": {
+#           "properties": {
+#             "name": { "type": "keyword" }
+#           }
+#         },
+#         "linmon": {
+#           "properties": {
+#             "type": { "type": "keyword" },
+#             "seq": { "type": "long" },
+#             "pid": { "type": "long" },
+#             "ppid": { "type": "long" },
+#             "uid": { "type": "long" },
+#             "comm": { "type": "keyword" },
+#             "package": { "type": "keyword" },
+#             "pkg_modified": { "type": "boolean" }
+#           }
+#         }
+#       }
+#     }
+#   }
+# }

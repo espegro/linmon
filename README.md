@@ -408,7 +408,7 @@ LinMon integrates with SIEM and log aggregation platforms for multi-host deploym
 
 **Ready-to-use integrations** (see `extras/` directory):
 - **Vector.dev + ClickHouse** (recommended): High-performance data pipeline with columnar OLAP storage
-- **Filebeat + Elasticsearch**: ELK stack integration for full-text search and visualization
+- **Filebeat + Elasticsearch**: ELK stack integration with full **ECS (Elastic Common Schema)** support
 - **Vector.dev + Elasticsearch**: High-performance alternative to Filebeat
 - **Splunk HEC**: Commercial SIEM integration (coming soon)
 

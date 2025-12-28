@@ -112,9 +112,19 @@ See **[rsyslog-remote.conf](rsyslog-remote.conf)** for:
 - Materialized views for real-time aggregations
 - TTL support for automatic data retention
 
-### Option 2: Filebeat + Elasticsearch (ELK Stack)
+### Option 2: Filebeat + Elasticsearch (ELK Stack) with ECS Support
 
-**Best for**: Existing ELK infrastructure, full-text search
+**Best for**: Existing ELK infrastructure, full-text search, Elastic Security
+
+LinMon provides **two Filebeat configurations**:
+- **`filebeat-ecs.yml`** ⭐ **Recommended** - Full ECS (Elastic Common Schema) compliance
+- **`filebeat.yml`** - Standard flat JSON format
+
+**ECS Benefits:**
+- Pre-built Elastic Security dashboards work out-of-box
+- Standardized field names (`process.pid`, `user.name`, `source.ip`)
+- Better correlation with other ECS data sources (Beats, APM, etc.)
+- MITRE ATT&CK mapping with `threat.technique.id` fields
 
 1. Install Filebeat:
    ```bash
@@ -125,7 +135,12 @@ See **[rsyslog-remote.conf](rsyslog-remote.conf)** for:
    sudo yum install filebeat
    ```
 
-2. Copy configuration:
+2. Copy ECS configuration (recommended):
+   ```bash
+   sudo cp extras/filebeat/filebeat-ecs.yml /etc/filebeat/filebeat.yml
+   ```
+
+   Or use standard configuration:
    ```bash
    sudo cp extras/filebeat/filebeat.yml /etc/filebeat/filebeat.yml
    ```
@@ -144,8 +159,18 @@ See **[rsyslog-remote.conf](rsyslog-remote.conf)** for:
 
 5. Verify in Elasticsearch:
    ```bash
+   # For ECS format:
+   curl -u elastic:password http://localhost:9200/linmon-ecs-*/_search?size=1 | jq .
+
+   # For standard format:
    curl -u elastic:password http://localhost:9200/linmon-*/_search?size=10
    ```
+
+See **[filebeat/README.md](filebeat/README.md)** for:
+- Complete ECS field mapping documentation
+- Comparison of ECS vs standard format
+- Kibana query examples (KQL)
+- MITRE ATT&CK detection queries
 
 ### Option 3: Vector.dev + Elasticsearch
 
