@@ -88,7 +88,7 @@ LinMon monitors multiple event types:
 
 1. **Process Events**: Execution (`EVENT_PROCESS_EXEC`) and termination (`EVENT_PROCESS_EXIT`)
 2. **File Events**: Create, modify, delete operations
-3. **Network Events**: TCP connections (`EVENT_NET_CONNECT_TCP`, `EVENT_NET_ACCEPT_TCP`), UDP traffic
+3. **Network Events**: TCP connections (`EVENT_NET_CONNECT_TCP`, `EVENT_NET_ACCEPT_TCP`), UDP traffic, vsock (`EVENT_NET_VSOCK_CONNECT`)
 4. **Privilege Events**: `setuid`, `setgid`, sudo usage
 
 All events can be selectively enabled/disabled via configuration file.

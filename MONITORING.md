@@ -88,8 +88,9 @@ LinMon logs the following event types:
 - `net_connect_tcp` - Outbound TCP connection
 - `net_accept_tcp` - Inbound TCP connection accepted
 - `net_send_udp` - UDP packet sent
+- `net_vsock_connect` - vsock (VM/container) connection (requires `monitor_vsock=true`)
 
-**Fields**:
+**Fields (TCP/UDP)**:
 ```json
 {
   "timestamp": "2024-11-30T10:15:30.123Z",
@@ -101,9 +102,29 @@ LinMon logs the following event types:
   "saddr": "192.168.1.100",
   "daddr": "1.1.1.1",
   "sport": 54321,
-  "dport": 443
+  "dport": 443,
+  "family": 2
 }
 ```
+
+**Fields (vsock)**:
+```json
+{
+  "timestamp": "2024-12-28T19:15:42.123Z",
+  "type": "net_vsock_connect",
+  "pid": 5432,
+  "uid": 1000,
+  "username": "alice",
+  "comm": "vm_app",
+  "saddr": "3",
+  "daddr": "2",
+  "sport": 12345,
+  "dport": 2049,
+  "family": 40
+}
+```
+
+> **Note**: vsock events use CIDs (Context IDs) instead of IP addresses. CID 2 is typically the host, CID 3+ are VMs/containers.
 
 ### File Events
 - `file_open` - File opened
