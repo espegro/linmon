@@ -305,5 +305,7 @@ Monitoring active.
 
 If you discover a security vulnerability, please report it to:
 - **DO NOT** open a public GitHub issue
-- Email: security@yourdomain.com (replace with actual contact)
-- Use GPG key: [key ID] for sensitive disclosures
+- Email: espegro@usit.uio.no
+- Use GPG key: `50AE70D791320122` for sensitive disclosures
+  - Fingerprint: Available at keys.openpgp.org
+  - 4096 bit RSA key, created 2014-03-27
