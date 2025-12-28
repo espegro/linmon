@@ -18,6 +18,7 @@ struct cache_entry {
     char path[PKG_PATH_MAX];
     ino_t inode;
     time_t mtime;
+    time_t cached_at;  // When this entry was cached (for TTL)
     char package[PKG_NAME_MAX];
     bool from_package;
     struct cache_entry *next;  // Hash chain
@@ -25,6 +26,11 @@ struct cache_entry {
 
 // Simple hash table
 #define HASH_BUCKETS 4096
+
+// Cache TTL in seconds (24 hours)
+// After this time, entries are re-queried even if inode/mtime match
+// This ensures package upgrades are detected even if binary has same inode
+#define CACHE_TTL (24 * 3600)
 
 static struct cache_entry *hash_table[HASH_BUCKETS];
 static pthread_mutex_t cache_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -325,6 +331,7 @@ static struct cache_entry *cache_add(const char *path, ino_t inode,
     entry->path[PKG_PATH_MAX - 1] = '\0';
     entry->inode = inode;
     entry->mtime = mtime;
+    entry->cached_at = time(NULL);  // Set cache timestamp
     strncpy(entry->package, package, PKG_NAME_MAX - 1);
     entry->package[PKG_NAME_MAX - 1] = '\0';
     entry->from_package = from_package;
@@ -343,6 +350,7 @@ static void cache_update(struct cache_entry *entry, ino_t inode,
 {
     entry->inode = inode;
     entry->mtime = mtime;
+    entry->cached_at = time(NULL);  // Update cache timestamp
     strncpy(entry->package, package, PKG_NAME_MAX - 1);
     entry->package[PKG_NAME_MAX - 1] = '\0';
     entry->from_package = from_package;
@@ -398,9 +406,12 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
 
     entry = cache_find(path);
     if (entry) {
-        // Check if file has changed (inode or mtime)
-        if (entry->inode != st.st_ino || entry->mtime != st.st_mtime) {
-            // File changed - need to revalidate
+        time_t now = time(NULL);
+
+        // Check if file has changed (inode or mtime) OR cache expired (TTL)
+        if (entry->inode != st.st_ino || entry->mtime != st.st_mtime ||
+            (now - entry->cached_at) > CACHE_TTL) {
+            // File changed or cache expired - need to revalidate
             needs_lookup = true;
             stat_revalidations++;
         } else {
@@ -489,18 +500,19 @@ int pkgcache_save(void)
     }
 
     // Write header
-    fprintf(fp, "# LinMon package cache v1\n");
-    fprintf(fp, "# path|inode|mtime|package|from_pkg\n");
+    fprintf(fp, "# LinMon package cache v2\n");
+    fprintf(fp, "# path|inode|mtime|cached_at|package|from_pkg\n");
 
     pthread_mutex_lock(&cache_mutex);
 
     for (i = 0; i < HASH_BUCKETS; i++) {
         struct cache_entry *entry = hash_table[i];
         while (entry) {
-            fprintf(fp, "%s|%lu|%ld|%s|%d\n",
+            fprintf(fp, "%s|%lu|%ld|%ld|%s|%d\n",
                     entry->path,
                     (unsigned long)entry->inode,
                     (long)entry->mtime,
+                    (long)entry->cached_at,
                     entry->package,
                     entry->from_package ? 1 : 0);
             entry = entry->next;
@@ -538,7 +550,7 @@ int pkgcache_load(void)
     while (fgets(line, sizeof(line), fp)) {
         char path[PKG_PATH_MAX];
         unsigned long inode;
-        long mtime;
+        long mtime, cached_at;
         char package[PKG_NAME_MAX];
         int from_pkg;
 
@@ -546,18 +558,42 @@ int pkgcache_load(void)
         if (line[0] == '#' || line[0] == '\n')
             continue;
 
-        // Parse line
-        if (sscanf(line, "%255[^|]|%lu|%ld|%63[^|]|%d",
+        // Try v2 format first: path|inode|mtime|cached_at|package|from_pkg
+        if (sscanf(line, "%255[^|]|%lu|%ld|%ld|%63[^|]|%d",
+                   path, &inode, &mtime, &cached_at, package, &from_pkg) >= 5) {
+            // Handle empty package field
+            if (strcmp(package, "|") == 0 || package[0] == '\0') {
+                package[0] = '\0';
+            }
+            struct cache_entry *entry = cache_add(path, (ino_t)inode, (time_t)mtime, package, from_pkg != 0);
+            if (entry) {
+                entry->cached_at = (time_t)cached_at;  // Restore cached timestamp
+            }
+            loaded++;
+        }
+        // Try v2 format with empty package: path|inode|mtime|cached_at||from_pkg
+        else if (sscanf(line, "%255[^|]|%lu|%ld|%ld||%d",
+                          path, &inode, &mtime, &cached_at, &from_pkg) == 5) {
+            struct cache_entry *entry = cache_add(path, (ino_t)inode, (time_t)mtime, "", from_pkg != 0);
+            if (entry) {
+                entry->cached_at = (time_t)cached_at;
+            }
+            loaded++;
+        }
+        // Fallback to v1 format: path|inode|mtime|package|from_pkg (backward compat)
+        else if (sscanf(line, "%255[^|]|%lu|%ld|%63[^|]|%d",
                    path, &inode, &mtime, package, &from_pkg) >= 4) {
             // Handle empty package field
             if (strcmp(package, "|") == 0 || package[0] == '\0') {
                 package[0] = '\0';
             }
+            // No cached_at in v1 - will be set to current time by cache_add
             cache_add(path, (ino_t)inode, (time_t)mtime, package, from_pkg != 0);
             loaded++;
-        } else if (sscanf(line, "%255[^|]|%lu|%ld||%d",
+        }
+        // Fallback to v1 format with empty package: path|inode|mtime||from_pkg
+        else if (sscanf(line, "%255[^|]|%lu|%ld||%d",
                           path, &inode, &mtime, &from_pkg) == 4) {
-            // Empty package field
             cache_add(path, (ino_t)inode, (time_t)mtime, "", from_pkg != 0);
             loaded++;
         }

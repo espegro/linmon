@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2025-12-28
+
+### Fixed
+- **Package cache TTL** - Added 24-hour time-to-live for cache entries
+  - Prevents stale package information after legitimate upgrades
+  - Cache entries now expire after 24 hours and are re-queried
+  - Existing detection (inode/mtime change) still works for immediate invalidation
+  - Backward compatible with v1 cache format (auto-upgrades to v2)
+
+### Technical Details
+- Added `cached_at` timestamp to cache entries
+- Cache lookup checks: `(now - cached_at) > 24h` for expiration
+- Cache file format upgraded to v2 with backward compatibility
+- Old v1 cache files are automatically migrated on load
+
+### Impact
+- **Medium severity bugfix**: Eliminates false positives after package upgrades
+- Improves reliability of package verification feature
+- No performance impact (queries only happen on cache miss or expiration)
+
 ## [1.3.0] - 2025-12-28
 
 ### Added
