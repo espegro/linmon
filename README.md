@@ -6,7 +6,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 
 ### Core Monitoring
 - **Process Monitoring**: Track execution and termination with full command-line arguments
-- **Network Monitoring**: TCP connections (connect/accept) and UDP traffic with IPv4/IPv6 support
+- **Network Monitoring**: TCP connections (connect/accept), UDP traffic with IPv4/IPv6 support, and vsock (VM/container) communication
 - **File Monitoring**: Track file create, modify, delete operations
 - **Privilege Escalation**: Detect setuid, setgid, and sudo usage
 
@@ -130,6 +130,7 @@ sudo vi /etc/linmon/linmon.conf
 Key configuration options:
 - `min_uid=1000` - Only log users with UID >= 1000 (ignore system users)
 - `max_uid=0` - Maximum UID to log (0 = no limit)
+- `monitor_vsock=false` - Monitor vsock (VM/container communication) - disabled by default
 - `capture_cmdline=true` - Capture full command-line arguments
 - `redact_sensitive=true` - Redact passwords/tokens from command lines
 - `hash_binaries=true` - Add SHA256 hash of executed binaries
@@ -212,6 +213,31 @@ Events are logged to `/var/log/linmon/events.json` in JSON Lines format (one JSO
   "dport": 443
 }
 ```
+
+#### vsock Connection (VM/Container Communication)
+```json
+{
+  "timestamp": "2024-12-28T19:15:42.123Z",
+  "hostname": "vmhost01",
+  "type": "net_vsock_connect",
+  "pid": 5432,
+  "ppid": 1234,
+  "sid": 5432,
+  "pgid": 5432,
+  "uid": 1000,
+  "username": "alice",
+  "tty": "",
+  "comm": "vm_app",
+  "process_name": "vm_application",
+  "saddr": "3",
+  "daddr": "2",
+  "sport": 12345,
+  "dport": 2049,
+  "family": 40
+}
+```
+
+> **Note**: vsock (Virtual Socket) events use CIDs (Context IDs) instead of IP addresses. CID 2 is typically the host, CID 3+ are VMs/containers. This example shows a VM (CID 3) connecting to the host (CID 2) on port 2049. Enable with `monitor_vsock=true` in config.
 
 #### Privilege Escalation (sudo)
 ```json
@@ -326,6 +352,7 @@ jq 'select(.sid == 1000)' /var/log/linmon/events.json
 - `process_exec`, `process_exit` - Process execution and termination
 - `net_connect_tcp`, `net_accept_tcp` - TCP connections
 - `net_send_udp` - UDP traffic
+- `net_vsock_connect` - vsock (VM/container) communication
 - `file_create`, `file_delete`, `file_modify` - File operations
 - `priv_setuid`, `priv_setgid`, `priv_sudo` - Privilege escalation
 
