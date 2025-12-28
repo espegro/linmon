@@ -450,14 +450,15 @@ The version is passed to the compiler via `-DLINMON_VERSION` and used in:
 
 ### Release Checklist
 
-1. Update version in `src/main.c` (two places)
-2. Update version in README.md examples if referenced
-3. `make clean && make` - verify no errors
-4. Test on target systems (Ubuntu 24.04, RHEL 9)
-5. `git tag -a v1.x.x -m "Release v1.x.x: description"`
-6. `git push && git push origin v1.x.x`
-7. `gh release create v1.x.x --title "..." --notes "..."`
-8. Update `/usr/local/sbin/linmond` and restart service
+1. Update version in `VERSION` file (single source of truth)
+2. Update `CHANGELOG.md` with release notes
+3. `make clean && make` - verify no errors (version auto-embedded from VERSION file)
+4. Test locally: `sudo systemctl stop linmond && sudo cp build/linmond /usr/local/sbin/linmond && sudo systemctl start linmond`
+5. `git add -A && git commit -m "..."`
+6. `git tag -a v1.x.x -m "Release v1.x.x: description"`
+7. `git push && git push origin v1.x.x`
+8. `gh release create v1.x.x --title "..." --notes "..."`
+9. GitHub Actions will automatically build Ubuntu 24.04 + RHEL 9 binaries
 
 ## Design Decisions
 
