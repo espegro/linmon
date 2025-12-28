@@ -85,6 +85,14 @@ monitor_tcp = true
 # Supports both IPv4 and IPv6
 monitor_udp = false
 
+# Monitor vsock (Virtual Socket) connections
+# vsock is used for VM-to-host and container-to-host communication
+# Logs: net_vsock_connect events with CID (Context ID) instead of IP addresses
+# Use case: Detect container escape attempts (T1611), VM-based C2, lateral movement
+# Note: CID 2 is typically the host, CID 3+ are VMs/containers
+# Default: false (only enable in VM/container environments)
+monitor_vsock = false
+
 # ============================================================================
 # FILTERING CONFIGURATION
 # ============================================================================
