@@ -107,7 +107,11 @@ struct file_event {
     __u32 type;
     __u64 timestamp;
     __u32 pid;
+    __u32 ppid;
     __u32 uid;
+    __u32 sid;
+    __u32 pgid;
+    char tty[16];
     char comm[TASK_COMM_LEN];
     char filename[MAX_FILENAME_LEN];
     __u32 flags;
@@ -118,7 +122,11 @@ struct network_event {
     __u32 type;
     __u64 timestamp;
     __u32 pid;
+    __u32 ppid;
     __u32 uid;
+    __u32 sid;
+    __u32 pgid;
+    char tty[16];
     char comm[TASK_COMM_LEN];
     __u8 saddr[16];  // IPv4 or IPv6 source address (IPv4 uses first 4 bytes)
     __u8 daddr[16];  // IPv4 or IPv6 destination address
@@ -132,6 +140,10 @@ struct privilege_event {
     __u32 type;
     __u64 timestamp;
     __u32 pid;
+    __u32 ppid;
+    __u32 sid;
+    __u32 pgid;
+    char tty[16];
     __u32 old_uid;
     __u32 new_uid;
     __u32 old_gid;
@@ -145,7 +157,11 @@ struct security_event {
     __u32 type;
     __u64 timestamp;
     __u32 pid;
+    __u32 ppid;
     __u32 uid;
+    __u32 sid;
+    __u32 pgid;
+    char tty[16];
     __u32 target_pid;                 // For ptrace: target PID; for execveat: fd
     __u32 flags;                      // ptrace request, module flags, memfd flags, unshare flags
     __u16 port;                       // For bind: port number

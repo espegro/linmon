@@ -231,6 +231,53 @@ static __always_inline void fill_session_info(struct process_event *event,
     }
 }
 
+// Generic macro to fill process context (ppid, sid, pgid, tty) for any event type
+// Works with file_event, network_event, privilege_event, security_event
+#define FILL_PROCESS_CONTEXT(event, task) \
+    do { \
+        struct task_struct *parent; \
+        struct signal_struct *signal; \
+        struct tty_struct *tty; \
+        struct pid *session_pid; \
+        struct pid *pgrp_pid; \
+        \
+        /* Fill ppid */ \
+        parent = BPF_CORE_READ(task, real_parent); \
+        if (parent) { \
+            (event)->ppid = BPF_CORE_READ(parent, tgid); \
+        } else { \
+            (event)->ppid = 0; \
+        } \
+        \
+        /* Initialize session info to safe defaults */ \
+        (event)->sid = 0; \
+        (event)->pgid = 0; \
+        (event)->tty[0] = '\0'; \
+        \
+        signal = BPF_CORE_READ(task, signal); \
+        if (!signal) \
+            break; \
+        \
+        /* Read session ID (pid namespace aware) */ \
+        session_pid = BPF_CORE_READ(signal, pids[PIDTYPE_SID]); \
+        if (session_pid) { \
+            (event)->sid = BPF_CORE_READ(task, group_leader, tgid); \
+        } \
+        \
+        /* Read process group ID */ \
+        pgrp_pid = BPF_CORE_READ(signal, pids[PIDTYPE_PGID]); \
+        if (pgrp_pid) { \
+            (event)->pgid = BPF_CORE_READ(task, tgid); \
+        } \
+        \
+        /* Read TTY name if available */ \
+        tty = BPF_CORE_READ(signal, tty); \
+        if (tty) { \
+            bpf_probe_read_kernel_str(&(event)->tty, sizeof((event)->tty), \
+                                       &tty->name); \
+        } \
+    } while (0)
+
 // Helper to read SUDO_UID from process environment
 // Returns the original UID before sudo, or 0 if not running via sudo
 // Only checks processes running as root (uid 0) for performance
@@ -440,6 +487,7 @@ static __always_inline int handle_openat_common(const char *filename, int flags)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct file_event *event;
+    struct task_struct *task;
 
     // Check UID filtering
     if (!should_monitor_uid(uid))
@@ -457,11 +505,16 @@ static __always_inline int handle_openat_common(const char *filename, int flags)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = (flags & O_CREAT) ? EVENT_FILE_CREATE : EVENT_FILE_MODIFY;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
     event->flags = flags;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     bpf_probe_read_user_str(&event->filename, sizeof(event->filename), filename);
@@ -493,6 +546,7 @@ static __always_inline int handle_unlinkat_common(const char *filename)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct file_event *event;
+    struct task_struct *task;
 
     if (!should_monitor_uid(uid))
         return 0;
@@ -504,11 +558,16 @@ static __always_inline int handle_unlinkat_common(const char *filename)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_FILE_DELETE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
     event->flags = 0;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     bpf_probe_read_user_str(&event->filename, sizeof(event->filename), filename);
@@ -542,6 +601,7 @@ int BPF_KPROBE(tcp_connect_enter, struct sock *sk)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct network_event *event;
+    struct task_struct *task;
     __u16 family, dport;
 
     if (!should_monitor_uid(uid))
@@ -559,10 +619,15 @@ int BPF_KPROBE(tcp_connect_enter, struct sock *sk)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_NET_CONNECT_TCP;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -622,6 +687,7 @@ int BPF_KPROBE(tcp_v4_connect_enter, struct sock *sk)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct network_event *event;
+    struct task_struct *task;
     __u16 family, dport;
 
     if (!should_monitor_uid(uid))
@@ -639,10 +705,15 @@ int BPF_KPROBE(tcp_v4_connect_enter, struct sock *sk)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_NET_CONNECT_TCP;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -701,6 +772,7 @@ int BPF_KRETPROBE(inet_accept_exit, struct sock *sk)
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct network_event *event;
+    struct task_struct *task;
     __u16 family, dport;
 
     if (!sk)
@@ -721,10 +793,15 @@ int BPF_KRETPROBE(inet_accept_exit, struct sock *sk)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_NET_ACCEPT_TCP;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -787,6 +864,7 @@ int BPF_KPROBE(udp_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t le
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct network_event *event;
+    struct task_struct *task;
     __u16 family, dport;
     struct sockaddr_in *sin;
 
@@ -805,10 +883,15 @@ int BPF_KPROBE(udp_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t le
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_NET_SEND_UDP;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -893,6 +976,7 @@ int BPF_KPROBE(udpv6_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t 
 {
     __u32 uid = bpf_get_current_uid_gid();
     struct network_event *event;
+    struct task_struct *task;
     __u16 family, dport;
 
     if (!should_monitor_uid(uid))
@@ -910,10 +994,15 @@ int BPF_KPROBE(udpv6_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t 
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_NET_SEND_UDP;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -952,6 +1041,7 @@ SEC("tp/sched/sched_process_exec")
 int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
 {
     struct privilege_event *event;
+    struct task_struct *task;
     char comm[TASK_COMM_LEN];
     __u64 pid_tgid;
     __u32 pid;
@@ -982,6 +1072,8 @@ int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_PRIV_SUDO;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = pid;
@@ -989,6 +1081,9 @@ int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
     event->old_gid = uid_gid >> 32;
     event->new_uid = 0;  // Will be set if/when setuid is called
     event->new_gid = 0;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     __builtin_memcpy(&event->comm, comm, TASK_COMM_LEN);
 
@@ -1005,6 +1100,7 @@ int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
 static __always_inline int handle_setuid_common(__u32 new_uid)
 {
     struct privilege_event *event;
+    struct task_struct *task;
     __u64 uid_gid = bpf_get_current_uid_gid();
     __u32 old_uid = uid_gid & 0xFFFFFFFF;
 
@@ -1020,6 +1116,8 @@ static __always_inline int handle_setuid_common(__u32 new_uid)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_PRIV_SETUID;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
@@ -1027,6 +1125,9 @@ static __always_inline int handle_setuid_common(__u32 new_uid)
     event->new_uid = new_uid;
     event->old_gid = uid_gid >> 32;
     event->new_gid = uid_gid >> 32;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->target_comm[0] = '\0';
@@ -1055,6 +1156,7 @@ int handle_setuid_kp(struct pt_regs *ctx)
 static __always_inline int handle_setgid_common(__u32 new_gid)
 {
     struct privilege_event *event;
+    struct task_struct *task;
     __u64 uid_gid = bpf_get_current_uid_gid();
     __u32 old_gid = uid_gid >> 32;
 
@@ -1070,6 +1172,8 @@ static __always_inline int handle_setgid_common(__u32 new_gid)
     if (!event)
         return 0;
 
+    task = (struct task_struct *)bpf_get_current_task();
+
     event->type = EVENT_PRIV_SETGID;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
@@ -1077,6 +1181,9 @@ static __always_inline int handle_setgid_common(__u32 new_gid)
     event->new_uid = uid_gid & 0xFFFFFFFF;
     event->old_gid = old_gid;
     event->new_gid = new_gid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->target_comm[0] = '\0';
@@ -1134,11 +1241,15 @@ static __always_inline int handle_ptrace_common(long request, __u32 target_pid)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_PTRACE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = target_pid;
     event->flags = (__u32)request;
     event->port = 0;
@@ -1183,11 +1294,15 @@ int handle_finit_module_tp(struct trace_event_raw_sys_enter *ctx)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_MODULE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = (__u32)ctx->args[2];  // Module flags
     event->port = 0;
@@ -1208,11 +1323,15 @@ int handle_finit_module_kp(struct pt_regs *ctx)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_MODULE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = (__u32)PT_REGS_PARM3(ctx);
     event->port = 0;
@@ -1234,11 +1353,15 @@ int handle_init_module_tp(struct trace_event_raw_sys_enter *ctx)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_MODULE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = 0;  // Legacy syscall doesn't have flags
     event->port = 0;
@@ -1259,11 +1382,15 @@ int handle_init_module_kp(struct pt_regs *ctx)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_MODULE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = 0;
     event->port = 0;
@@ -1294,11 +1421,15 @@ static __always_inline int handle_memfd_common(const char *name, unsigned int fl
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_MEMFD;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = flags;
     event->port = 0;
@@ -1360,11 +1491,15 @@ static __always_inline int handle_bind_common(int fd, struct sockaddr *addr, int
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_BIND;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = fd;  // Store fd in target_pid field
     event->flags = 0;
     event->family = family;
@@ -1446,11 +1581,15 @@ static __always_inline int handle_unshare_common(unsigned long flags)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_UNSHARE;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = (__u32)flags;
     event->port = 0;
@@ -1500,11 +1639,15 @@ static __always_inline int handle_execveat_common(int dirfd, const char *pathnam
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_EXECVEAT;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = dirfd;  // Store fd in target_pid
     event->flags = 0;
     event->port = 0;
@@ -1575,11 +1718,15 @@ static __always_inline int handle_bpf_common(int cmd, unsigned int attr_size)
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
     event->type = EVENT_SECURITY_BPF;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = 0;
     event->port = 0;
@@ -1787,11 +1934,15 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
             struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
             if (!event)
                 return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
             
             event->type = EVENT_SECURITY_LDPRELOAD;
             event->timestamp = bpf_ktime_get_ns();
             event->pid = bpf_get_current_pid_tgid() >> 32;
             event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
             event->target_pid = 0;
             event->flags = flags;
             event->port = 0;
@@ -1830,11 +1981,15 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     
     event->type = EVENT_SECURITY_CRED_READ;
     event->timestamp = bpf_ktime_get_ns();
     event->pid = bpf_get_current_pid_tgid() >> 32;
     event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
     event->target_pid = 0;
     event->flags = flags;
     event->port = 0;

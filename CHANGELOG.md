@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.7] - 2025-12-28
+
+### Added
+- **Process context fields for all event types** - Added `ppid`, `sid`, `pgid`, `tty` to file, network, privilege, and security events
+  - File events: Now include parent PID, session ID, process group ID, TTY
+  - Network events: Now include parent PID, session ID, process group ID, TTY
+  - Privilege events: Now include parent PID, session ID, process group ID, TTY
+  - Security events: Now include parent PID, session ID, process group ID, TTY
+  - Enables better SIEM correlation and incident response
+  - Consistent event schema across all event types
+
+### Changed
+- All event types now have consistent process context matching `process_event`
+- JSON schema is now uniform - all events have same baseline fields
+
+### Technical Details
+- Added `FILL_PROCESS_CONTEXT` macro in eBPF for code reuse
+- Modified all event structures in `bpf/common.h` to include new fields
+- Updated all eBPF event handlers to populate process context
+- Updated all logger functions in `src/logger.c` to output new fields in JSON
+
+### Benefits
+- **Easier SIEM analysis**: Directly see parent process, session, process group for all events
+- **Better incident response**: Track process hierarchies without additional lookups
+- **Improved alerting**: Correlate network activity with parent processes
+- **Consistent schema**: Same fields across all event types simplifies parsing
+
+### Example
+```json
+{
+  "type": "net_connect_tcp",
+  "pid": 12346,
+  "ppid": 12345,
+  "sid": 12345,
+  "pgid": 12345,
+  "tty": "pts/0",
+  "comm": "curl",
+  "daddr": "1.2.3.4",
+  "dport": 443
+}
+```
+
+Now you can see that curl (PID 12346) was started by bash (PPID 12345) in session 12345.
+
 ## [1.2.6] - 2025-12-28
 
 ### Fixed

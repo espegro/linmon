@@ -547,11 +547,22 @@ int logger_log_file_event(const struct file_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
-            seq, timestamp, hostname_escaped, event_type, event->pid, event->uid);
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
+            event->sid, event->pgid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    // TTY field
+    if (event->tty[0]) {
+        char tty_escaped[16 * 6];
+        json_escape(event->tty, tty_escaped, sizeof(tty_escaped));
+        fprintf(log_fp, ",\"tty\":\"%s\"", tty_escaped);
+    } else {
+        fprintf(log_fp, ",\"tty\":\"\"");
     }
 
     fprintf(log_fp, ",\"comm\":\"%s\",\"filename\":\"%s\"", comm_escaped, filename_escaped);
@@ -648,12 +659,22 @@ int logger_log_network_event(const struct network_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
-            "\"uid\":%u",
-            seq, timestamp, hostname_escaped, event_type, event->pid, event->uid);
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
+            event->sid, event->pgid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    // TTY field
+    if (event->tty[0]) {
+        char tty_escaped[16 * 6];
+        json_escape(event->tty, tty_escaped, sizeof(tty_escaped));
+        fprintf(log_fp, ",\"tty\":\"%s\"", tty_escaped);
+    } else {
+        fprintf(log_fp, ",\"tty\":\"\"");
     }
 
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
@@ -738,10 +759,10 @@ int logger_log_privilege_event(const struct privilege_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,"
-            "\"old_uid\":%u",
-            seq, timestamp, hostname_escaped, event_type, event->pid,
-            event->old_uid);
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "\"sid\":%u,\"pgid\":%u,\"old_uid\":%u",
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
+            event->sid, event->pgid, event->old_uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"old_username\":\"%s\"", old_username_escaped);
@@ -753,10 +774,19 @@ int logger_log_privilege_event(const struct privilege_event *event)
         fprintf(log_fp, ",\"new_username\":\"%s\"", new_username_escaped);
     }
 
-    fprintf(log_fp, ",\"old_gid\":%u,\"new_gid\":%u,"
-            "\"comm\":\"%s\"",
-            event->old_gid, event->new_gid,
-            comm_escaped);
+    fprintf(log_fp, ",\"old_gid\":%u,\"new_gid\":%u",
+            event->old_gid, event->new_gid);
+
+    // TTY field
+    if (event->tty[0]) {
+        char tty_escaped[16 * 6];
+        json_escape(event->tty, tty_escaped, sizeof(tty_escaped));
+        fprintf(log_fp, ",\"tty\":\"%s\"", tty_escaped);
+    } else {
+        fprintf(log_fp, ",\"tty\":\"\"");
+    }
+
+    fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
 
     // Try to get process_name from /proc/<pid>/exe
     char process_name[PATH_MAX];
@@ -860,11 +890,22 @@ int logger_log_security_event(const struct security_event *event)
     pthread_mutex_lock(&log_mutex);
 
     fprintf(log_fp,
-            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"uid\":%u",
-            seq, timestamp, hostname_escaped, event_type, event->pid, event->uid);
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
+            "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
+            seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
+            event->sid, event->pgid, event->uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    // TTY field
+    if (event->tty[0]) {
+        char tty_escaped[16 * 6];
+        json_escape(event->tty, tty_escaped, sizeof(tty_escaped));
+        fprintf(log_fp, ",\"tty\":\"%s\"", tty_escaped);
+    } else {
+        fprintf(log_fp, ",\"tty\":\"\"");
     }
 
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
