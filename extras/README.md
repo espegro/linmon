@@ -6,12 +6,33 @@ This directory contains configuration examples for integrating LinMon with vario
 
 ```
 extras/
+├── RISK_ANALYSIS.md     # Security risk analysis and threat modeling
 ├── rsyslog-remote.conf  # Remote syslog forwarding (tamper-resistant logs)
 ├── vector/              # Vector.dev configuration (recommended)
 ├── clickhouse/          # ClickHouse schema and queries
 ├── filebeat/            # Filebeat configuration for ELK stack
+├── reports/             # Daily and security reporting scripts
 └── splunk/              # Splunk configurations (coming soon)
 ```
+
+## Risk Analysis & Threat Modeling
+
+**Best for**: Security teams, compliance audits, risk assessments
+
+See **[RISK_ANALYSIS.md](RISK_ANALYSIS.md)** for comprehensive analysis of:
+- **Why** organizations need runtime monitoring (threat landscape, compliance)
+- **What risks** LinMon mitigates (MITRE ATT&CK coverage, incident response)
+- **What risks** LinMon introduces (privileged access, kernel access, performance)
+- **How** those risks are mitigated (privilege dropping, BPF verifier, tamper detection)
+- **What remains** as residual risk (root attackers, zero-days, evasion)
+
+Key topics:
+- Business case for deployment (dwell time reduction: 287 days → 24 days)
+- MITRE ATT&CK technique coverage (13 techniques directly detected)
+- Attack surface analysis and defense-in-depth recommendations
+- Compliance mapping (PCI-DSS, NIST CSF, HIPAA, SOC 2)
+- Incident response integration workflows
+- Risk acceptance matrix with severity/likelihood analysis
 
 ## Remote Syslog Forwarding (Tamper Detection)
 
