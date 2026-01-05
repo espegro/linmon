@@ -8,12 +8,55 @@ This directory contains configuration examples for integrating LinMon with vario
 extras/
 ├── RISK_ANALYSIS.md     # Security risk analysis and threat modeling
 ├── rsyslog-remote.conf  # Remote syslog forwarding (tamper-resistant logs)
+├── lkrg/                # LKRG integration (optional rootkit prevention) ⭐ NEW
 ├── vector/              # Vector.dev configuration (recommended)
 ├── clickhouse/          # ClickHouse schema and queries
 ├── filebeat/            # Filebeat configuration for ELK stack
 ├── reports/             # Daily and security reporting scripts
 └── splunk/              # Splunk configurations (coming soon)
 ```
+
+**Note**: All items in this directory are **optional**. LinMon core works standalone without any of these integrations.
+
+---
+
+## LKRG Integration (Rootkit Prevention) ⭐ NEW
+
+**Dependency**: Linux Kernel Runtime Guard (LKRG)
+- Package: `lkrg-dkms` (build from source for Ubuntu, EPEL for RHEL)
+- Source: https://github.com/lkrg-org/lkrg
+
+**Provides**:
+- Runtime module blocking after LinMon loads (prevents Singularity-type rootkits)
+- Hidden module detection
+- Kernel integrity checking
+- Syscall table protection
+
+**Use case**: Defense-in-depth against kernel rootkits
+
+**Quick Start**:
+```bash
+# 1. Install LKRG (Ubuntu - build from source)
+git clone https://github.com/lkrg-org/lkrg
+cd lkrg && make && sudo make install
+sudo modprobe lkrg
+
+# 2. Start LinMon
+sudo systemctl start linmond
+
+# 3. Enable LKRG lockdown
+cd extras/lkrg
+sudo ./linmon-enable-lockdown.sh
+
+# 4. Verify protection
+sudo ./linmon-check-lockdown.sh
+```
+
+**See**: `lkrg/README.md` for complete documentation, installation, and troubleshooting.
+
+**Important**: LinMon works completely standalone without LKRG. This is an optional enhancement for high-security environments.
+
+---
 
 ## Risk Analysis & Threat Modeling
 

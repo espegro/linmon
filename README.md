@@ -44,6 +44,20 @@ LinMon consists of two main components:
 1. **eBPF Programs** (`bpf/`): Kernel-space programs that attach to various kernel tracepoints and kprobes to capture events
 2. **Userspace Daemon** (`src/`): Service that loads eBPF programs, collects events, and writes structured logs
 
+### Core vs Optional Features
+
+**LinMon core has zero runtime dependencies** - it works completely standalone after installation. All monitoring features (process, network, file, privilege escalation, security events) require only:
+- Linux kernel >= 5.8 with BTF support (standard on Ubuntu 24.04, RHEL 9+)
+- Standard C library (glibc/musl)
+- No external packages, agents, or services
+
+**Optional enhancements** are available in the `extras/` directory:
+- **LKRG integration** - Rootkit prevention and kernel integrity checking (requires `lkrg-dkms` package)
+- **SIEM integrations** - Vector.dev, Filebeat, ClickHouse configurations for multi-host deployments
+- **Remote syslog** - Tamper-resistant audit trail forwarding
+
+See **[extras/README.md](extras/README.md)** for optional feature documentation.
+
 ## Installation
 
 ### Pre-built Binaries (Recommended)
@@ -107,13 +121,16 @@ For detailed installation instructions including RHEL/Rocky setup, manual instal
 
 ## Requirements
 
-### System Requirements
+### Runtime Requirements (Deployed Binary)
 - Linux kernel >= 5.8 (with BTF support)
   - Ubuntu 24.04: ✅ kernel 6.8+
   - RHEL 9: ✅ kernel 5.14+
   - RHEL 10: ✅ kernel 6.x+
+- **No external packages required** - LinMon works standalone after installation
 
-### Build Dependencies
+### Build Dependencies (Compile from Source)
+
+The following packages are only needed if building from source. Pre-built binaries have no runtime dependencies beyond the kernel.
 
 See **[INSTALL.md](INSTALL.md)** for complete dependency lists for Ubuntu and RHEL.
 
@@ -565,11 +582,16 @@ See **[MONITORING.md](MONITORING.md)** for complete troubleshooting guide.
 
 ## Documentation
 
+### Core Documentation
 - **[README.md](README.md)** - This file: overview, quick start, configuration
 - **[INSTALL.md](INSTALL.md)** - Installation guide: dependencies, build, troubleshooting
 - **[MONITORING.md](MONITORING.md)** - Monitoring guide: queries, alerts, integrations
 - **[SECURITY.md](SECURITY.md)** - Security features and hardening details
 - **[CLAUDE.md](CLAUDE.md)** - Development guide: architecture, building, contributing
+
+### Optional Features
+- **[extras/README.md](extras/README.md)** - Optional integrations: LKRG, SIEM, remote syslog
+- **[extras/lkrg/README.md](extras/lkrg/README.md)** - Rootkit prevention with LKRG (optional)
 
 ## Development
 

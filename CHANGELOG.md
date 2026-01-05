@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-01-05
+
+### Added
+- **BPF load failure logging** - Enhanced detection of rootkit interference
+  - Logs to syslog with `LOG_CRIT` priority when BPF programs fail to load
+  - Creates persistent alert file: `/var/log/linmon/CRITICAL_BPF_LOAD_FAILED`
+  - Detailed stderr output with troubleshooting steps
+  - Explicitly mentions "Singularity" rootkit in error messages
+  - Success path logs: "BPF programs loaded successfully (no interference detected)"
+  - Enables detection when rootkits block `bpf()` syscall (e.g., Singularity)
+
+- **Core vs Extras architecture** - Clear separation of required vs optional features
+  - Created `extras/` directory for optional integrations
+  - Moved LKRG integration scripts to `extras/lkrg/`
+  - Added comprehensive `extras/lkrg/README.md` with installation and usage
+  - LKRG is now clearly documented as optional (not required for core functionality)
+
+### Changed
+- **Zero runtime dependencies** - Documentation now emphasizes LinMon core has no external dependencies
+  - Updated README.md with "Core vs Optional Features" section
+  - Updated ROOTKIT_PREVENTION.md to separate core (Layers 1-5) from optional (Layer 6: LKRG)
+  - Updated scripts/README.md to clearly mark LKRG as optional
+  - All monitoring and detection works standalone without LKRG
+
+### Technical Details
+- BPF load failure creates forensic evidence that survives daemon exit
+- Alert file includes timestamp, hostname, kernel version, and investigation steps
+- Uses `gethostname()` and `uname()` for system information (no config struct dependency)
+- Syslog logging ensures tamper-resistant audit trail
+- LKRG scripts in `extras/lkrg/`: `linmon-enable-lockdown.sh`, `linmon-check-lockdown.sh`, `setup-failure-alerting.sh`, `linmon-failure-alert.sh`
+
+### Security Impact
+- **High severity enhancement**: Detects when rootkits prevent LinMon from loading
+- Provides forensic evidence for incident response
+- Makes rootkit interference immediately visible in syslog/journald
+- Complements LKRG's optional runtime protection with core detection capability
+
 ## [1.3.1] - 2025-12-28
 
 ### Fixed

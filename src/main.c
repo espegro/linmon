@@ -13,6 +13,7 @@
 #include <grp.h>
 #include <syslog.h>
 #include <time.h>
+#include <sys/utsname.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
@@ -931,12 +932,123 @@ int main(int argc, char **argv)
     filter_init(&global_config);
 
     // Load and open BPF application
+    // CRITICAL SECURITY CHECKPOINT: If this fails, it may indicate:
+    // 1. Kernel rootkit blocking bpf() syscall (e.g., Singularity)
+    // 2. Missing kernel BTF support
+    // 3. Insufficient privileges
     skel = linmon_bpf__open_and_load();
     if (!skel) {
-        fprintf(stderr, "Failed to open/load LinMon BPF programs\n");
+        // Get error details
+        int bpf_errno = errno;
+        const char *error_msg = strerror(bpf_errno);
+
+        // CRITICAL: Log to syslog IMMEDIATELY (survives daemon exit)
+        // This ensures we have persistent evidence of BPF load failures
+        syslog(LOG_CRIT,
+               "CRITICAL: Failed to load BPF programs: %s (errno=%d). "
+               "This may indicate kernel rootkit interference (e.g., Singularity rootkit blocking bpf() syscall). "
+               "LinMon cannot start without BPF support. "
+               "Verify: 1) Kernel version >= 5.8, 2) BTF enabled (/sys/kernel/btf/vmlinux exists), "
+               "3) No rootkit blocking bpf() syscall, 4) Sufficient capabilities (CAP_BPF, CAP_PERFMON). "
+               "Check dmesg for kernel messages.",
+               error_msg, bpf_errno);
+
+        // Also log to stderr for systemd journal (visible in journalctl)
+        fprintf(stderr, "\n");
+        fprintf(stderr, "╔═══════════════════════════════════════════════════════════════╗\n");
+        fprintf(stderr, "║  CRITICAL: LinMon BPF Program Loading FAILED                 ║\n");
+        fprintf(stderr, "╚═══════════════════════════════════════════════════════════════╝\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "Error: %s (errno=%d)\n", error_msg, bpf_errno);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "This failure may indicate:\n");
+        fprintf(stderr, "  1. 🚨 KERNEL ROOTKIT blocking bpf() syscall\n");
+        fprintf(stderr, "     → Singularity-type attack in progress\n");
+        fprintf(stderr, "     → Check: dmesg | grep -iE '(singularity|rootkit|module)'\n");
+        fprintf(stderr, "     → Check: lsmod | grep -iE '(singularity|rootkit)'\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "  2. Missing kernel BTF (BPF Type Format) support\n");
+        fprintf(stderr, "     → Check: ls -l /sys/kernel/btf/vmlinux\n");
+        fprintf(stderr, "     → If missing, rebuild kernel with CONFIG_DEBUG_INFO_BTF=y\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "  3. Insufficient privileges\n");
+        fprintf(stderr, "     → LinMon requires: CAP_BPF, CAP_PERFMON, CAP_NET_ADMIN\n");
+        fprintf(stderr, "     → Check: getcap /usr/local/sbin/linmond\n");
+        fprintf(stderr, "     → Running as root? Check: id -u\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "  4. Kernel version too old\n");
+        fprintf(stderr, "     → LinMon requires kernel >= 5.8 for CO-RE support\n");
+        fprintf(stderr, "     → Check: uname -r\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "For rootkit investigation:\n");
+        fprintf(stderr, "  sudo dmesg | tail -100\n");
+        fprintf(stderr, "  sudo lsmod | head -20\n");
+        fprintf(stderr, "  sudo journalctl -u linmond --since '10 minutes ago'\n");
+        fprintf(stderr, "\n");
+
+        // Create persistent alert file (forensic evidence, survives daemon exit)
+        // This file can be checked by monitoring systems, SIEM, or manual investigation
+        const char *alert_file = "/var/log/linmon/CRITICAL_BPF_LOAD_FAILED";
+        FILE *alert_fp = fopen(alert_file, "w");
+        if (alert_fp) {
+            time_t now = time(NULL);
+            char *time_str = ctime(&now);
+            char hostname[256];
+            struct utsname uname_buf;
+
+            // Get hostname
+            if (gethostname(hostname, sizeof(hostname)) != 0) {
+                strncpy(hostname, "unknown", sizeof(hostname));
+            }
+            hostname[sizeof(hostname) - 1] = '\0';
+
+            // Get kernel version
+            if (uname(&uname_buf) != 0) {
+                strncpy(uname_buf.release, "unknown", sizeof(uname_buf.release));
+            }
+
+            fprintf(alert_fp, "LinMon BPF Loading Failed\n");
+            fprintf(alert_fp, "========================\n");
+            fprintf(alert_fp, "Timestamp: %s", time_str); // ctime includes \n
+            fprintf(alert_fp, "Error: %s (errno=%d)\n", error_msg, bpf_errno);
+            fprintf(alert_fp, "Hostname: %s\n", hostname);
+            fprintf(alert_fp, "Kernel: %s\n", uname_buf.release);
+            fprintf(alert_fp, "\n");
+            fprintf(alert_fp, "POSSIBLE ROOTKIT INTERFERENCE DETECTED\n");
+            fprintf(alert_fp, "\n");
+            fprintf(alert_fp, "Investigation Steps:\n");
+            fprintf(alert_fp, "1. Check for known rootkits:\n");
+            fprintf(alert_fp, "   dmesg | grep -iE '(singularity|rootkit|lkrg|module.*blocked)'\n");
+            fprintf(alert_fp, "\n");
+            fprintf(alert_fp, "2. Check loaded kernel modules:\n");
+            fprintf(alert_fp, "   lsmod | head -20\n");
+            fprintf(alert_fp, "\n");
+            fprintf(alert_fp, "3. Check for hidden modules (if LKRG installed):\n");
+            fprintf(alert_fp, "   dmesg | grep LKRG\n");
+            fprintf(alert_fp, "\n");
+            fprintf(alert_fp, "4. Check system call blocking:\n");
+            fprintf(alert_fp, "   strace -e bpf bpftool prog list 2>&1 | head\n");
+            fprintf(alert_fp, "\n");
+            fprintf(alert_fp, "5. Verify kernel configuration:\n");
+            fprintf(alert_fp, "   ls -l /sys/kernel/btf/vmlinux\n");
+            fprintf(alert_fp, "   grep CONFIG_DEBUG_INFO_BTF /boot/config-$(uname -r)\n");
+            fprintf(alert_fp, "\n");
+            fclose(alert_fp);
+
+            // Log that we created the alert file
+            syslog(LOG_CRIT, "Created alert file: %s", alert_file);
+        } else {
+            // Even if we can't create alert file, log the attempt
+            syslog(LOG_ERR, "Failed to create alert file %s: %s", alert_file, strerror(errno));
+        }
+
         err = -1;
         goto cleanup;
     }
+
+    // SUCCESS: BPF programs loaded successfully
+    // Log this for tamper detection - absence of this log may indicate manipulation
+    syslog(LOG_INFO, "BPF programs loaded successfully (no interference detected)");
 
     // Update config map
     err = update_bpf_config(bpf_map__fd(skel->maps.config_map), &global_config);
