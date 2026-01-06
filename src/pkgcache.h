@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Espen Grøndahl <espegro@usit.uio.no>
 // Package cache - tracks which binaries belong to system packages
 
 #ifndef PKGCACHE_H

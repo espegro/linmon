@@ -523,11 +523,36 @@ The version is passed to the compiler via `-DLINMON_VERSION` and used in:
 2. Update `CHANGELOG.md` with release notes
 3. `make clean && make` - verify no errors (version auto-embedded from VERSION file)
 4. Test locally: `sudo systemctl stop linmond && sudo cp build/linmond /usr/local/sbin/linmond && sudo systemctl start linmond`
-5. `git add -A && git commit -m "..."`
+5. `git add -A && git commit -m "Release v1.x.x: description"`
 6. `git tag -a v1.x.x -m "Release v1.x.x: description"`
 7. `git push && git push origin v1.x.x`
-8. `gh release create v1.x.x --title "..." --notes "..."`
-9. GitHub Actions will automatically build Ubuntu 24.04 + RHEL 9 binaries
+8. Create GitHub release with CHANGELOG notes:
+   ```bash
+   # Extract release notes from CHANGELOG.md for this version
+   VERSION=$(cat VERSION)
+
+   # Extract release section (between ## [VERSION] headers, excluding blank lines)
+   NOTES=$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '1d' | sed '$d' | sed '/^$/d')
+
+   # Create release with notes from CHANGELOG
+   gh release create v$VERSION \
+     --title "LinMon v$VERSION" \
+     --notes "$NOTES"
+   ```
+
+   Or use the helper script:
+   ```bash
+   ./scripts/create-release.sh  # Automatically uses VERSION file
+   ```
+9. GitHub Actions will automatically build Ubuntu 24.04 + RHEL 9 binaries and attach to release
+
+**Important:** Always include detailed release notes in CHANGELOG.md following Keep a Changelog format:
+- `### Added` - New features
+- `### Changed` - Changes to existing functionality
+- `### Fixed` - Bug fixes
+- Include MITRE ATT&CK technique IDs where applicable
+- Add example events and detection scenarios
+- Document technical details and compatibility notes
 
 ## Design Decisions
 

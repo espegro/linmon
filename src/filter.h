@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Espen Grøndahl <espegro@usit.uio.no>
 // Event filtering and processing
 
 #ifndef __LINMON_FILTER_H

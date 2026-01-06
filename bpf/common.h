@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Espen Grøndahl <espegro@usit.uio.no>
 // Common definitions shared between eBPF and userspace
 
 #ifndef __LINMON_COMMON_H

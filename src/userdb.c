@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Espen Grøndahl <espegro@usit.uio.no>
 // User database - UID to username resolution with caching
 
 #include <stdio.h>
