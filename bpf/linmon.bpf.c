@@ -2257,6 +2257,10 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
     }
 
     // Check for credential file READ (T1003.008)
+    // Only monitor actual credential files
+    if (cred_type == 0)
+        return 0;  // Not a credential file
+
     // We want to detect READs - any open that's not purely write
     // O_RDONLY = 0, so check if NOT (O_WRONLY without O_RDWR)
     if ((flags & O_WRONLY) && !(flags & O_RDWR))

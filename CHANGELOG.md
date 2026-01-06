@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-01-06
+
+### Fixed
+
+**Critical bugfix: Credential read detection false positives**
+- Fixed excessive `security_cred_read` events for non-credential files
+- Bug: Missing `cred_type == 0` check in credential READ section (bpf/linmon.bpf.c:2259)
+- Impact: ALL non-write-only file opens were logged with `"cred_file":"unknown"`
+  - `/etc/ld.so.cache`, shared libraries, locale files, `/proc/*/cmdline`, etc.
+  - Generated thousands of false positive events per hour
+- Root cause: Credential READ handler checked operation flags but not file type
+- Fix: Added 4-line check matching existing pattern used by credential WRITE handler
+- After fix: Zero false positives, only actual credential file access logged
+- Code review: Verified all other security handlers have correct file type checks
+
+**Details:**
+```diff
++ // Only monitor actual credential files
++ if (cred_type == 0)
++     return 0;  // Not a credential file
++
+  // We want to detect READs - any open that's not purely write
+  if ((flags & O_WRONLY) && !(flags & O_RDWR))
+      return 0;  // Write-only, not interesting for credential theft
+```
+
+The bug was introduced in v1.4.1 when credential WRITE detection was added. The READ section was updated to detect both reads and writes but lost the file type validation check.
+
 ## [1.4.1] - 2026-01-06
 
 ### Added
@@ -702,7 +730,9 @@ Now you can see that curl (PID 12346) was started by bash (PPID 12345) in sessio
 - Systemd service integration
 - SIGHUP config reload support
 
-[Unreleased]: https://github.com/espegro/linmon/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/espegro/linmon/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/espegro/linmon/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/espegro/linmon/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/espegro/linmon/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/espegro/linmon/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/espegro/linmon/compare/v1.3.1...v1.3.2
