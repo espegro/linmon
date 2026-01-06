@@ -127,8 +127,8 @@ cd linmon
 
 **Option 2: Release tarball**:
 ```bash
-# Download latest release (replace VERSION with actual version, e.g., v1.1.0)
-VERSION=v1.1.0
+# Download latest release (replace VERSION with actual version, e.g., v1.4.2)
+VERSION=v1.4.2
 curl -L -O https://github.com/espegro/linmon/archive/refs/tags/${VERSION}.tar.gz
 tar xzf ${VERSION}.tar.gz
 cd linmon-${VERSION#v}
