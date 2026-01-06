@@ -279,17 +279,25 @@ checkpoint_interval = 30
 # These detections have very low false positive rates and catch critical
 # attack techniques. ENABLED BY DEFAULT - recommended for all systems.
 
-# Monitor credential/auth file reads - T1003.008 Credential Dumping detection
+# Monitor credential/auth file reads - T1003.008, T1552.004, T1098.004
 # Logs: security_cred_read events with "cred_file" field indicating type
 # Detects reads of:
 #   - /etc/shadow, /etc/gshadow (password hashes)
 #   - /etc/sudoers, /etc/sudoers.d/* (sudo configuration)
-#   - /etc/ssh/* (SSH configuration, authorized_keys)
+#   - /etc/ssh/* (SSH system configuration)
 #   - /etc/pam.d/* (PAM authentication configuration)
+#   - ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa (SSH private keys)
+#   - ~/.ssh/authorized_keys (SSH backdoor detection)
+#   - ~/.ssh/config (SSH user configuration)
 # Use case: Detect credential theft, auth config reconnaissance, privilege escalation prep
 # Smart filtering: Whitelists legitimate processes (login, sshd, su, sudo,
 #                  passwd, useradd, sssd, nscd, polkitd, gdm, cron, etc.)
 # Only logs SUSPICIOUS reads - legitimate auth processes are ignored
+# Known limitation: SSH keys only detected if /.ssh/ occurs within first 22 chars of path
+#   ✓ Covers: /root/.ssh/*, /home/<user>/.ssh/ (username <= 10 chars) - 95%+ of systems
+#   ✗ Misses: /home/very_long_username/.ssh/* (username > 10 chars)
+#   ✗ Misses: Custom paths like /data/users/alice/.ssh/*
+#   Trade-off: BPF verifier complexity limits vs broad coverage
 # Default: true (RECOMMENDED - very low noise, catches credential theft)
 monitor_cred_read = true
 
@@ -377,6 +385,12 @@ monitor_bpf = false
 # Warning: Legitimate admin tasks write to these locations
 # Recommendation: Enable on production servers, correlate with user activity
 # persistence_type values: cron, systemd, shell_profile, init, autostart
+# Known limitation: Shell profiles only detected if /.bashrc etc occurs within first 38 chars
+#   ✓ Covers: /root/.bashrc, /home/<user>/.bashrc (username <= 16 chars) - 95%+ of systems
+#   ✓ Covers: All /etc/* and /var/* paths (always detected)
+#   ✗ Misses: /home/very_long_username/.bashrc (username > 16 chars)
+#   ✗ Misses: Custom paths like /data/users/alice/.bashrc
+#   Trade-off: BPF verifier complexity limits vs broad coverage
 monitor_persistence = false
 
 # Monitor SUID/SGID manipulation - T1548.001 Privilege Escalation detection

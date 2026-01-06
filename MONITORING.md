@@ -231,6 +231,23 @@ Monitors access to sensitive files by non-whitelisted processes:
 }
 ```
 
+**Known Limitations**:
+
+Due to BPF verifier complexity limits, SSH key and user persistence detection has path length constraints:
+
+- **SSH keys** (`~/.ssh/*`): Only detected if `/.ssh/` occurs within first 22 characters of path
+  - ✓ Covers: `/root/.ssh/*`, `/home/<user>/.ssh/` (username ≤ 10 chars) - **95%+ of systems**
+  - ✗ Misses: `/home/very_long_username/.ssh/*` (username > 10 chars)
+  - ✗ Misses: Custom paths like `/data/users/alice/.ssh/*`
+
+- **Shell profiles** (`~/.bashrc`, etc.): Only detected if pattern occurs within first 38 characters
+  - ✓ Covers: `/root/.bashrc`, `/home/<user>/.bashrc` (username ≤ 16 chars) - **95%+ of systems**
+  - ✗ Misses: Very long usernames or custom home directory structures
+
+- **System paths always detected**: All `/etc/*` and `/var/*` paths have no limitations
+
+**Workaround**: Enable `monitor_files = true` for 100% coverage (warning: high event volume).
+
 #### LD_PRELOAD Hijacking (T1574.006)
 - `security_ldpreload` - Write attempt to /etc/ld.so.preload
 
