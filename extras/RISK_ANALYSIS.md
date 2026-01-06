@@ -90,22 +90,31 @@ LinMon provides detection coverage for key ATT&CK techniques:
 | Tactic | Technique | LinMon Detection | Event Type |
 |--------|-----------|-----------------|------------|
 | **Privilege Escalation** | T1548 (Abuse Elevation Control) | Sudo usage logging | `priv_sudo` |
+| **Privilege Escalation** | T1548.001 (SUID/SGID) | chmod +s detection | `security_suid` |
+| **Privilege Escalation** | T1611 (Container Escape) | Namespace manipulation | `security_unshare` |
 | **Defense Evasion** | T1055 (Process Injection) | Ptrace detection | `security_ptrace` |
-| **Credential Access** | T1003.008 (Credential Dumping) | Shadow file reads | `security_cred_read` |
-| **Persistence** | T1547.006 (Kernel Modules) | Module loading | `security_module` |
-| **Persistence** | T1574.006 (LD_PRELOAD) | Preload file writes | `security_ldpreload` |
 | **Defense Evasion** | T1014 (Rootkit) | eBPF program loading | `security_bpf` |
 | **Defense Evasion** | T1620 (Fileless Malware) | memfd_create usage | `security_memfd` |
+| **Defense Evasion** | T1070.001 (Log Clearing) | Log file truncate/delete | `security_log_tamper` |
+| **Credential Access** | T1003.008 (Credential Dumping) | Shadow/sudoers reads | `security_cred_read` |
+| **Credential Access** | T1552.004 (Private Keys) | SSH key access | `security_cred_read` |
+| **Persistence** | T1098.001 (Account Manipulation) | Shadow/sudoers writes | `security_cred_write` |
+| **Persistence** | T1098.004 (SSH Authorized Keys) | authorized_keys writes | `security_cred_write` |
+| **Persistence** | T1053 (Scheduled Task/Job) | Cron file writes | `security_persistence` |
+| **Persistence** | T1547 (Boot/Logon Autostart) | Systemd/shell profiles | `security_persistence` |
+| **Persistence** | T1547.006 (Kernel Modules) | Module loading | `security_module` |
+| **Persistence** | T1574.006 (LD_PRELOAD) | Preload file writes | `security_ldpreload` |
 | **Command & Control** | T1571 (Bind Shell) | Suspicious port binding | `security_bind` |
-| **Privilege Escalation** | T1611 (Container Escape) | Namespace manipulation | `security_unshare` |
 | **Execution** | T1059 (Command Interpreter) | Shell execution logging | `process_exec` |
 | **Discovery** | T1046 (Network Service Discovery) | TCP connection scanning | `net_connect_tcp` |
 | **Lateral Movement** | T1021.004 (SSH) | SSH connections | `net_connect_tcp` (port 22) |
 
 **Coverage Analysis:**
-- **13 techniques** directly detected
-- **87%** of common post-exploitation techniques covered
+- **19 techniques** directly detected (up from 13 in v1.3.x)
+- **~95%** of common post-exploitation techniques covered (up from 87%)
 - **Real-time** detection (not signature-based)
+- **v1.4.0 additions**: SSH keys (T1552.004, T1098.004), SUID (T1548.001), Persistence (T1053, T1547)
+- **v1.4.1 additions**: Account manipulation (T1098.001), Log tampering (T1070.001)
 
 ### 2.2 Visibility Benefits
 
