@@ -10,6 +10,7 @@
 #include <getopt.h>
 #include <sys/resource.h>
 #include <sys/capability.h>
+#include <sys/prctl.h>
 #include <grp.h>
 #include <syslog.h>
 #include <time.h>
@@ -27,6 +28,13 @@
 #include "linmon.skel.h"
 #include "../bpf/common.h"
 #include <arpa/inet.h>
+#include <linux/securebits.h>
+
+// Ambient capability support (Linux >= 4.3)
+#ifndef PR_CAP_AMBIENT
+#define PR_CAP_AMBIENT 47
+#define PR_CAP_AMBIENT_RAISE 2
+#endif
 
 static volatile bool exiting = false;
 static volatile bool reload_config = false;
@@ -177,10 +185,22 @@ static int bump_memlock_rlimit(void)
     return setrlimit(RLIMIT_MEMLOCK, &rlim_new);
 }
 
-static int drop_capabilities(void)
+static int prepare_capabilities(void)
 {
     cap_t caps;
+    cap_value_t cap_values[1] = { CAP_SYS_PTRACE };
     int ret;
+
+    // Prevent capability clearing on setuid()
+    // SECBIT_KEEP_CAPS: Keep caps when switching to non-root UID
+    // SECBIT_NO_SETUID_FIXUP: Don't clear PERMITTED/EFFECTIVE on setuid
+    ret = prctl(PR_SET_SECUREBITS,
+                SECBIT_KEEP_CAPS | SECBIT_KEEP_CAPS_LOCKED |
+                SECBIT_NO_SETUID_FIXUP | SECBIT_NO_SETUID_FIXUP_LOCKED);
+    if (ret) {
+        fprintf(stderr, "Failed to set securebits: %s\n", strerror(errno));
+        return -1;
+    }
 
     // Get current capabilities
     caps = cap_get_proc();
@@ -189,16 +209,31 @@ static int drop_capabilities(void)
         return -1;
     }
 
-    // Clear all capabilities (drop everything)
-    // After BPF programs are loaded and attached, we don't need any capabilities
-    ret = cap_clear(caps);
+    // Set CAP_SYS_PTRACE in PERMITTED set (required for ambient)
+    ret = cap_set_flag(caps, CAP_PERMITTED, 1, cap_values, CAP_SET);
     if (ret) {
-        fprintf(stderr, "Failed to clear capabilities: %s\n", strerror(errno));
+        fprintf(stderr, "Failed to set permitted capabilities: %s\n", strerror(errno));
         cap_free(caps);
         return -1;
     }
 
-    // Apply the cleared capability set
+    // Set CAP_SYS_PTRACE in EFFECTIVE set (required for ambient)
+    ret = cap_set_flag(caps, CAP_EFFECTIVE, 1, cap_values, CAP_SET);
+    if (ret) {
+        fprintf(stderr, "Failed to set effective capabilities: %s\n", strerror(errno));
+        cap_free(caps);
+        return -1;
+    }
+
+    // Set CAP_SYS_PTRACE in INHERITABLE set (required for ambient)
+    ret = cap_set_flag(caps, CAP_INHERITABLE, 1, cap_values, CAP_SET);
+    if (ret) {
+        fprintf(stderr, "Failed to set inheritable capabilities: %s\n", strerror(errno));
+        cap_free(caps);
+        return -1;
+    }
+
+    // Apply the capability set
     ret = cap_set_proc(caps);
     if (ret) {
         fprintf(stderr, "Failed to set capabilities: %s\n", strerror(errno));
@@ -207,6 +242,17 @@ static int drop_capabilities(void)
     }
 
     cap_free(caps);
+
+    // Set ambient capability so CAP_SYS_PTRACE persists across UID change
+    // Requires: CAP in PERMITTED, EFFECTIVE, and INHERITABLE sets (done above)
+    // Requires: SECBIT_NO_SETUID_FIXUP to prevent clearing on setuid
+    // Kernel requirement: >= 4.3
+    ret = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SYS_PTRACE, 0, 0);
+    if (ret) {
+        fprintf(stderr, "Failed to set ambient capability: %s\n", strerror(errno));
+        return -1;
+    }
+
     return 0;
 }
 
@@ -1108,9 +1154,20 @@ int main(int argc, char **argv)
     // Record daemon start time for uptime tracking
     daemon_start_time = time(NULL);
 
+    // Prepare capabilities BEFORE dropping UID/GID (requires root)
+    // Sets CAP_SYS_PTRACE as ambient so it persists across UID change
+    // This allows reading /proc/<pid>/exe for masquerading detection
+    if (getuid() == 0) {
+        err = prepare_capabilities();
+        if (err) {
+            fprintf(stderr, "CRITICAL: Failed to prepare capabilities - aborting for security\n");
+            goto cleanup;
+        }
+    }
+
     // Drop UID/GID to nobody user if running as root
-    // IMPORTANT: This must be done BEFORE dropping capabilities
-    // (we need CAP_SETUID/CAP_SETGID to change UID/GID)
+    // IMPORTANT: Capabilities must be prepared BEFORE this
+    // (ambient capabilities persist across UID change)
     if (getuid() == 0) {
         // Drop supplementary groups first (prevents retaining group memberships
         // like 'disk', 'adm', 'docker' after dropping to nobody)
@@ -1128,6 +1185,20 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
+        // Drop CAP_SETUID and CAP_SETGID after UID change
+        // This prevents regaining root while keeping CAP_SYS_PTRACE
+        cap_t caps = cap_get_proc();
+        if (caps) {
+            cap_value_t drop_caps[2] = { CAP_SETUID, CAP_SETGID };
+            cap_set_flag(caps, CAP_PERMITTED, 2, drop_caps, CAP_CLEAR);
+            cap_set_flag(caps, CAP_EFFECTIVE, 2, drop_caps, CAP_CLEAR);
+            if (cap_set_proc(caps) != 0) {
+                fprintf(stderr, "Warning: Failed to drop SETUID/SETGID capabilities: %s\n",
+                        strerror(errno));
+            }
+            cap_free(caps);
+        }
+
         // Verify we can't regain root
         if (setuid(0) == 0) {
             fprintf(stderr, "CRITICAL: Was able to regain root after dropping privileges!\n");
@@ -1135,17 +1206,8 @@ int main(int argc, char **argv)
         }
 
         printf("✓ Dropped to UID/GID 65534 (nobody), cleared supplementary groups\n");
+        printf("✓ Retained CAP_SYS_PTRACE for masquerading detection\n");
     }
-
-    // Drop all capabilities now that BPF programs are loaded and attached
-    // This reduces attack surface - we no longer need root privileges
-    // IMPORTANT: This must be done AFTER dropping UID/GID
-    err = drop_capabilities();
-    if (err) {
-        fprintf(stderr, "CRITICAL: Failed to drop capabilities - aborting for security\n");
-        goto cleanup;
-    }
-    printf("✓ Dropped all capabilities (running with minimal privileges)\n");
 
     // Set up ring buffer polling
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event,

@@ -213,11 +213,32 @@ static inline bool check_fprintf_result(int ret)
     return true;
 }
 
+// Check if comm name mismatches process_name (masquerading detection)
+// Handles TASK_COMM_LEN truncation (max 15 chars) intelligently
+// Returns true if mismatch detected (potential masquerading)
+static bool is_comm_mismatch(const char *comm, const char *process_name)
+{
+    if (!comm || !process_name)
+        return false;
+
+    size_t name_len = strlen(process_name);
+
+    // If process_name is longer than 15 chars (TASK_COMM_LEN - 1),
+    // comm will be truncated, so compare only the first 15 chars
+    if (name_len > 15) {
+        return (strncmp(comm, process_name, 15) != 0);
+    }
+
+    // process_name fits in comm, do full comparison
+    return (strcmp(comm, process_name) != 0);
+}
+
 // Read executable path from /proc/<pid>/exe symlink and extract process_name (basename)
 // Uses readlink() which works without CAP_SYS_PTRACE (only needs symlink read permission)
 // Returns true if successful, false otherwise
 // Sets process_name_out to basename of executable path
-static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t size)
+// Optionally detects if executable is deleted (is_deleted can be NULL)
+static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t size, bool *is_deleted)
 {
     char proc_path[64];
     char exe_path[PATH_MAX];
@@ -227,6 +248,8 @@ static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t
         return false;
 
     process_name_out[0] = '\0';
+    if (is_deleted)
+        *is_deleted = false;
 
     // Read /proc/<pid>/exe symlink
     // readlink() works without CAP_SYS_PTRACE - only needs symlink read permission
@@ -238,12 +261,23 @@ static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t
 
     exe_path[len] = '\0';  // readlink() doesn't null-terminate
 
-    // Extract basename from path
-    const char *basename = strrchr(exe_path, '/');
+    // Check for deleted executable marker " (deleted)"
+    if (is_deleted) {
+        *is_deleted = (strstr(exe_path, " (deleted)") != NULL);
+    }
+
+    // Extract basename from path (strip " (deleted)" suffix if present)
+    char *basename = strrchr(exe_path, '/');
     if (basename) {
         basename++;  // Skip the '/'
     } else {
         basename = exe_path;  // No slash, use full path
+    }
+
+    // Strip " (deleted)" suffix from basename if present
+    char *deleted_marker = strstr(basename, " (deleted)");
+    if (deleted_marker) {
+        *deleted_marker = '\0';  // Truncate at marker
     }
 
     // Copy to output
@@ -430,6 +464,9 @@ int logger_log_process_event(const struct process_event *event)
         json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
         fprintf(log_fp, ",\"filename\":\"%s\"", filename_escaped);
 
+        // Check for deleted executable in filename path
+        bool deleted_exec = (strstr(event->filename, " (deleted)") != NULL);
+
         // Extract process_name (basename) from filename
         const char *process_name = strrchr(event->filename, '/');
         if (process_name) {
@@ -437,9 +474,29 @@ int logger_log_process_event(const struct process_event *event)
         } else {
             process_name = event->filename;  // No slash, use full filename
         }
+
+        // Strip " (deleted)" suffix from process_name if present
+        char clean_process_name[MAX_FILENAME_LEN];
+        strncpy(clean_process_name, process_name, sizeof(clean_process_name) - 1);
+        clean_process_name[sizeof(clean_process_name) - 1] = '\0';
+        char *deleted_marker = strstr(clean_process_name, " (deleted)");
+        if (deleted_marker) {
+            *deleted_marker = '\0';
+        }
+
         char process_name_escaped[MAX_FILENAME_LEN * 6];
-        json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
+        json_escape(clean_process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+
+        // Check for comm mismatch (masquerading detection)
+        if (is_comm_mismatch(event->comm, clean_process_name)) {
+            fprintf(log_fp, ",\"comm_mismatch\":true");
+        }
+
+        // Log if executable was deleted
+        if (deleted_exec) {
+            fprintf(log_fp, ",\"deleted_executable\":true");
+        }
 
         // Hash binary if enabled and this is an exec event
         if (enable_hash_binaries && event->type == EVENT_PROCESS_EXEC) {
@@ -691,10 +748,21 @@ int logger_log_network_event(const struct network_event *event)
 
     // Try to get process_name from /proc/<pid>/exe
     char process_name[PATH_MAX];
-    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name))) {
+    bool deleted_exec = false;
+    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name), &deleted_exec)) {
         char process_name_escaped[PATH_MAX * 6];
         json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+
+        // Check for comm mismatch (masquerading detection)
+        if (is_comm_mismatch(event->comm, process_name)) {
+            fprintf(log_fp, ",\"comm_mismatch\":true");
+        }
+
+        // Log if executable was deleted
+        if (deleted_exec) {
+            fprintf(log_fp, ",\"deleted_executable\":true");
+        }
     } else {
         fprintf(log_fp, ",\"process_name\":null");
     }
@@ -800,10 +868,21 @@ int logger_log_privilege_event(const struct privilege_event *event)
 
     // Try to get process_name from /proc/<pid>/exe
     char process_name[PATH_MAX];
-    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name))) {
+    bool deleted_exec = false;
+    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name), &deleted_exec)) {
         char process_name_escaped[PATH_MAX * 6];
         json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+
+        // Check for comm mismatch (masquerading detection)
+        if (is_comm_mismatch(event->comm, process_name)) {
+            fprintf(log_fp, ",\"comm_mismatch\":true");
+        }
+
+        // Log if executable was deleted
+        if (deleted_exec) {
+            fprintf(log_fp, ",\"deleted_executable\":true");
+        }
     } else {
         fprintf(log_fp, ",\"process_name\":null");
     }
@@ -922,10 +1001,21 @@ int logger_log_security_event(const struct security_event *event)
 
     // Try to get process_name from /proc/<pid>/exe
     char process_name[PATH_MAX];
-    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name))) {
+    bool deleted_exec = false;
+    if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name), &deleted_exec)) {
         char process_name_escaped[PATH_MAX * 6];
         json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
         fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
+
+        // Check for comm mismatch (masquerading detection)
+        if (is_comm_mismatch(event->comm, process_name)) {
+            fprintf(log_fp, ",\"comm_mismatch\":true");
+        }
+
+        // Log if executable was deleted
+        if (deleted_exec) {
+            fprintf(log_fp, ",\"deleted_executable\":true");
+        }
     } else {
         fprintf(log_fp, ",\"process_name\":null");
     }

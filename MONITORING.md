@@ -223,6 +223,65 @@ Monitors reads of sensitive files by non-whitelisted processes:
 - `security_execveat` - T1620 Fileless Execution (fd-based exec)
 - `security_bpf` - T1014 eBPF Rootkit Detection
 
+### Process Masquerading Detection Fields
+
+LinMon adds two security-focused fields to detect suspicious process behavior:
+
+#### comm_mismatch
+**Type**: boolean (only present when true)
+**Event types**: network events, privilege events, security events
+**Description**: Detects when a process changes its comm name to masquerade as another program
+
+**Detection method**:
+- Compares kernel comm name (from `task_struct->comm`) with actual executable path
+- Reads `/proc/<pid>/exe` symlink to get real executable basename
+- Smart prefix matching: handles 15-char TASK_COMM_LEN truncation
+- Only logged when mismatch detected
+
+**Example**:
+```json
+{
+  "type": "net_connect_tcp",
+  "comm": "systemd",
+  "process_name": "backdoor",
+  "comm_mismatch": true,
+  "daddr": "198.51.100.1"
+}
+```
+
+**SIEM query** (Elasticsearch/Splunk):
+```
+comm_mismatch:true AND (filename:/tmp/* OR filename:/dev/shm/* OR package:null)
+```
+
+#### deleted_executable
+**Type**: boolean (only present when true)
+**Event types**: network events, privilege events, security events
+**Description**: Detects when a process executable has been deleted from disk
+
+**Detection method**:
+- Reads `/proc/<pid>/exe` symlink marked with ` (deleted)` suffix
+- Indicates fileless execution or post-exploitation cleanup
+- Only logged when detected
+
+**Example**:
+```json
+{
+  "type": "net_connect_tcp",
+  "comm": "malware",
+  "process_name": "malware",
+  "deleted_executable": true,
+  "daddr": "198.51.100.1"
+}
+```
+
+**SIEM query** (Elasticsearch/Splunk):
+```
+deleted_executable:true
+```
+
+**Note**: Process exec events (`process_exec`) already have `filename` and `process_name` fields from eBPF capture at exec time. These new fields apply to post-exec events (network, privilege, security) where the process name must be read from `/proc`.
+
 ## Common Analysis Patterns
 
 ### Security Monitoring

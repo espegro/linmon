@@ -22,20 +22,31 @@ setuid(65534);       // Drop to nobody user
 - Supplementary groups must be cleared first (prevents retaining privileged group memberships)
 - This must happen BEFORE dropping capabilities (requires CAP_SETUID/CAP_SETGID)
 
-### 2. Capability Dropping (Second)
-After UID/GID are dropped, LinMon drops ALL capabilities:
-```c
-// After UID/GID drop:
-drop_capabilities();  // Clears all capabilities
-```
-**Critical**: If capability drop fails, LinMon **aborts** (does not continue with elevated privileges).
+### 2. Capability Retention (After UID/GID Drop)
+LinMon retains **only CAP_SYS_PTRACE** after privilege drop for masquerading detection:
 
-**Verification**: After dropping, LinMon verifies it cannot regain root:
 ```c
-if (setuid(0) == 0) {
-    abort();  // Should never succeed
-}
+// Before UID drop:
+prepare_capabilities();  // Set CAP_SYS_PTRACE as ambient capability
+
+// After UID/GID drop to nobody:
+// Drop CAP_SETUID and CAP_SETGID to prevent regaining root
+cap_set_flag(caps, CAP_PERMITTED, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
+cap_set_flag(caps, CAP_EFFECTIVE, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
+
+// Result: nobody user with only CAP_SYS_PTRACE (read /proc/<pid>/exe)
 ```
+
+**Purpose**: CAP_SYS_PTRACE allows reading `/proc/<pid>/exe` for all users, enabling process masquerading detection.
+
+**Security measures**:
+- Ambient capabilities (kernel >= 4.3) preserve CAP_SYS_PTRACE across UID change
+- SECBIT_NO_SETUID_FIXUP + SECBIT_KEEP_CAPS prevent capability clearing on setuid()
+- Both securebits locked with _LOCKED variants
+- CAP_SETUID and CAP_SETGID explicitly dropped after UID transition
+- Verification ensures cannot regain root: `setuid(0)` must fail
+
+**Critical**: If capability setup fails, LinMon **aborts** (does not continue with incorrect privileges).
 
 ## Configuration Security
 

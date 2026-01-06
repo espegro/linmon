@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-01-06
+
+### Added
+- Process masquerading detection - New comm_mismatch field
+  - Detects when processes change comm name via prctl() to impersonate other programs
+  - Smart prefix matching handles TASK_COMM_LEN truncation (15 char max)
+  - Compares kernel comm name vs actual executable from /proc/<pid>/exe
+  - Only logged when mismatch detected (sparse field for efficiency)
+  - Works across all event types: network, privilege, security events
+
+- Deleted executable detection - New deleted_executable field
+  - Detects when process executable is deleted while running
+  - Indicator of fileless malware or post-exploitation cleanup
+  - Reads from /proc/<pid>/exe symlink marked with (deleted) suffix
+  - Only logged when detected (sparse field)
+
+### Changed
+- CAP_SYS_PTRACE capability now retained after privilege drop
+  - Enables reading /proc/<pid>/exe for processes across all users
+  - Required for masquerading detection in network/privilege/security events
+  - Uses ambient capabilities (kernel >= 4.3) for UID transition
+  - SECBIT_NO_SETUID_FIXUP + SECBIT_KEEP_CAPS prevent capability clearing
+  - CAP_SETUID and CAP_SETGID explicitly dropped after UID change
+  - Security verification ensures cannot regain root privileges
+
+### Technical Details
+- Smart comm matching: prefix-match for names > 15 chars, full match otherwise
+- Ambient capability requires PERMITTED + EFFECTIVE + INHERITABLE sets
+- Securebits locked with _LOCKED variants to prevent modification
+- Detection works on: net_connect_tcp, net_accept_tcp, net_send_udp, net_vsock_connect, priv_setuid, priv_setgid, priv_sudo, all security_* events
+- Process exec events continue to use filename field (already available at exec time)
+
+### Security Impact
+- Medium severity enhancement: Detects process impersonation attacks
+- Examples: malware masquerading as systemd, Chrome, or other trusted processes
+- Combines with existing package verification and binary hashing for defense-in-depth
+- CAP_SYS_PTRACE addition: minimal attack surface (read-only /proc access)
+- Extensive testing: verified capability setup, UID drop, and regain-root prevention
+
+### Example Detection
+```json
+{
+  "type": "net_connect_tcp",
+  "comm": "systemd",
+  "process_name": "malware",
+  "comm_mismatch": true,
+  "daddr": "192.0.2.1"
+}
+```
+
 ## [1.3.2] - 2026-01-05
 
 ### Added
