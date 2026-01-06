@@ -72,6 +72,8 @@ struct linmon_config {
     bool monitor_ldpreload;   // T1574.006 - LD_PRELOAD hijacking
     bool monitor_persistence; // T1053, T1547 - Persistence mechanisms (cron, systemd, shell profiles)
     bool monitor_suid;        // T1548.001 - SUID/SGID manipulation (chmod +s)
+    bool monitor_cred_write;  // T1098.001 - Account manipulation (credential file writes)
+    bool monitor_log_tamper;  // T1070.001 - Log tampering (deletion/truncation)
 };
 
 // Load configuration from file

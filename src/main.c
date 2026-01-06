@@ -437,6 +437,10 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             return 0;
         if (type == EVENT_SECURITY_SUID && !global_config.monitor_suid)
             return 0;
+        if (type == EVENT_SECURITY_CRED_WRITE && !global_config.monitor_cred_write)
+            return 0;
+        if (type == EVENT_SECURITY_LOG_TAMPER && !global_config.monitor_log_tamper)
+            return 0;
 
         if (data_sz < sizeof(struct security_event)) {
             fprintf(stderr, "Invalid security event size: %zu\n", data_sz);

@@ -211,7 +211,7 @@ LinMon retains minimal privileges:
 
 ## MITRE ATT&CK Coverage
 
-LinMon provides comprehensive detection coverage for post-exploitation techniques. As of v1.4.0, LinMon detects **~92%** of common post-exploitation techniques used by attackers after initial compromise.
+LinMon provides comprehensive detection coverage for post-exploitation techniques. As of v1.4.1, LinMon detects **~95%** of common post-exploitation techniques used by attackers after initial compromise.
 
 ### Detection Capabilities by MITRE Technique
 
@@ -231,7 +231,10 @@ LinMon provides comprehensive detection coverage for post-exploitation technique
 | T1574.006 | Hijack Execution Flow: LD_PRELOAD | Writes to `/etc/ld.so.preload` | `security_ldpreload` | **On** |
 | **Credential Access** | | | | |
 | T1003.008 | OS Credential Dumping: /etc/passwd and /etc/shadow | Reads of `/etc/shadow`, `/etc/gshadow` | `security_cred_read` | **On** |
+| T1098.001 | Account Manipulation: /etc/shadow | Writes to `/etc/shadow`, `/etc/sudoers`, `~/.ssh/authorized_keys` | `security_cred_write` | **On** |
+| T1098.004 | SSH Authorized Keys Backdoor | Writes to `~/.ssh/authorized_keys` | `security_cred_write` | **On** |
 | T1552.004 | Private Keys | Reads of `~/.ssh/id_*` (rsa, ed25519, ecdsa) | `security_cred_read` | **On** |
+| T1070.001 | Indicator Removal: Clear Linux Logs | Truncation/deletion of `/var/log/*` files | `security_log_tamper` | **On** |
 | **Discovery** | | | | |
 | T1082 | System Information Discovery | Process execution, network connections, file access | `process_exec`, `net_*`, `file_*` | On |
 | **Lateral Movement** | | | | |
@@ -253,14 +256,16 @@ LinMon provides comprehensive detection coverage for post-exploitation technique
 
 ### Coverage Summary
 
-**Enabled by Default** (~40% of techniques, high signal-to-noise):
-- ✅ Credential file access (shadow, sudoers, SSH keys)
-- ✅ LD_PRELOAD rootkit detection
-- ✅ Process masquerading detection
-- ✅ Deleted executable detection
+**Enabled by Default** (~45% of techniques, high signal-to-noise):
+- ✅ Credential file reads (shadow, sudoers, SSH keys) - T1003.008, T1552.004
+- ✅ Credential file writes (account manipulation, SSH backdoors) - T1098.001, T1098.004
+- ✅ Log tampering detection (anti-forensics) - T1070.001
+- ✅ LD_PRELOAD rootkit detection - T1574.006
+- ✅ Process masquerading detection - T1036
+- ✅ Deleted executable detection - T1620
 - ✅ Basic process/network monitoring
 
-**Opt-In Detection** (~52% of techniques, may generate noise):
+**Opt-In Detection** (~50% of techniques, may generate noise):
 - ⚙️ Persistence mechanisms (cron, systemd, shell profiles)
 - ⚙️ SUID/SGID manipulation
 - ⚙️ Kernel module loading
@@ -276,6 +281,8 @@ LinMon provides comprehensive detection coverage for post-exploitation technique
 ```ini
 # Enable all security monitors for maximum visibility
 monitor_cred_read = true      # Credential theft (default: on)
+monitor_cred_write = true     # Account manipulation (default: on)
+monitor_log_tamper = true     # Log clearing/anti-forensics (default: on)
 monitor_ldpreload = true      # LD_PRELOAD rootkit (default: on)
 monitor_persistence = true    # Cron/systemd/shell profile persistence
 monitor_suid = true           # SUID binary manipulation
@@ -292,6 +299,8 @@ monitor_unshare = true        # Container escape
 ```ini
 # Enable only high-value, low-noise detections
 monitor_cred_read = true      # Credential theft
+monitor_cred_write = true     # Account manipulation
+monitor_log_tamper = true     # Log clearing
 monitor_ldpreload = true      # LD_PRELOAD rootkit
 monitor_persistence = true    # Persistence detection
 monitor_suid = true           # SUID manipulation
@@ -300,9 +309,11 @@ monitor_suid = true           # SUID manipulation
 
 **Minimal Monitoring** (audit logging only):
 ```ini
-# Only credential theft detection (very low noise)
-monitor_cred_read = true      # Credential theft
-monitor_ldpreload = true      # LD_PRELOAD rootkit
+# Only critical security detections (very low noise)
+monitor_cred_read = true      # Credential theft (default: on)
+monitor_cred_write = true     # Account manipulation (default: on)
+monitor_log_tamper = true     # Log clearing (default: on)
+monitor_ldpreload = true      # LD_PRELOAD rootkit (default: on)
 monitor_processes = true      # Process execution logging
 monitor_tcp = true            # Network connections
 # All other security monitors disabled

@@ -77,6 +77,8 @@ enum event_type {
     EVENT_SECURITY_LDPRELOAD = 22,   // T1574.006 - LD_PRELOAD hijacking
     EVENT_SECURITY_PERSISTENCE = 24, // T1053, T1547 - Persistence mechanisms (cron, systemd, shell profiles)
     EVENT_SECURITY_SUID = 25,     // T1548.001 - SUID/SGID manipulation (chmod +s)
+    EVENT_SECURITY_CRED_WRITE = 26,  // T1098.001 - Account manipulation (/etc/passwd, shadow, sudoers writes)
+    EVENT_SECURITY_LOG_TAMPER = 27,  // T1070.001 - Log file tampering (/var/log/* deletion/truncate)
 };
 
 // Process information stored in map

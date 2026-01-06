@@ -402,3 +402,25 @@ monitor_persistence = false
 # Recommendation: Enable on high-security systems, alert on unexpected paths
 # Event fields: path, mode (full mode bits), suid (true/false), sgid (true/false)
 monitor_suid = false
+
+# Monitor credential file WRITES - T1098.001 Account Manipulation detection
+# Logs: security_cred_write events
+# Detects: Writes to /etc/passwd, /etc/shadow, /etc/sudoers, ~/.ssh/authorized_keys, etc.
+# Use case: Detect account creation, password changes, privilege escalation, SSH backdoors
+# Files monitored: /etc/shadow, /etc/gshadow, /etc/sudoers, /etc/sudoers.d/*,
+#                  /etc/ssh/* (system SSH config), /etc/pam.d/* (PAM config),
+#                  ~/.ssh/id_* (private keys), ~/.ssh/authorized_keys, ~/.ssh/config
+# Warning: Very low noise - credential file writes are rare outside package installs
+# Recommendation: Enable by default (true) - critical detection with minimal noise
+# Event fields: cred_file (shadow/sudoers/ssh_authorized_keys/etc), path, open_flags
+monitor_cred_write = true
+
+# Monitor log file tampering - T1070.001 Log Clearing / Anti-Forensics detection
+# Logs: security_log_tamper events
+# Detects: Truncation or deletion of files in /var/log/*
+# Use case: Detect attackers covering their tracks (> /var/log/auth.log, rm /var/log/*)
+# Smart filtering: Whitelists legitimate log managers (logrotate, rsyslogd, systemd-journal, auditd, linmond)
+# Warning: Very low noise - log tampering by non-whitelisted processes is almost always malicious
+# Recommendation: Enable by default (true) - critical detection with minimal noise
+# Event fields: tamper_type (truncate/delete), path, open_flags (for truncate)
+monitor_log_tamper = true

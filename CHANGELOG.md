@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-01-06
+
+### Added
+
+#### Credential File WRITE Detection (T1098.001 - Account Manipulation)
+- New event type: `EVENT_SECURITY_CRED_WRITE` (26)
+- Detects writes to authentication/authorization files
+- Config flag: `monitor_cred_write = true` (enabled by default)
+- Monitored files:
+  - `/etc/shadow`, `/etc/gshadow` - Password hash modification
+  - `/etc/sudoers`, `/etc/sudoers.d/*` - Sudo privilege escalation
+  - `/etc/ssh/*` - SSH system configuration tampering
+  - `/etc/pam.d/*` - PAM authentication backdoors
+  - `~/.ssh/id_*` - SSH private key replacement
+  - `~/.ssh/authorized_keys` - SSH backdoor installation (T1098.004)
+  - `~/.ssh/config` - SSH configuration hijacking
+- Event fields:
+  - cred_file: File type (shadow, gshadow, sudoers, ssh_authorized_keys, etc.)
+  - path: Full file path
+  - open_flags: File open flags (O_WRONLY, O_RDWR, O_CREAT, O_TRUNC)
+- Use case: Detect account manipulation, password changes, SSH backdoors
+
+#### Log File Tampering Detection (T1070.001 - Log Clearing / Anti-Forensics)
+- New event type: `EVENT_SECURITY_LOG_TAMPER` (27)
+- Detects attempts to cover tracks by deleting or truncating log files
+- Config flag: `monitor_log_tamper = true` (enabled by default)
+- Detection methods:
+  - **Truncation**: Detects O_TRUNC flag on `/var/log/*` files (e.g., `> /var/log/auth.log`)
+  - **Deletion**: Detects unlink/rm operations on `/var/log/*` files
+- Smart filtering: Whitelists legitimate log managers to avoid false positives
+  - logrotate, rsyslogd, systemd-journal, syslog-ng, auditd, linmond
+- Event fields:
+  - tamper_type: "truncate" or "delete"
+  - path: Log file path
+  - open_flags: File open flags (for truncate events)
+- Use case: Detect attackers covering their tracks after compromise
+
+### Technical Details
+
+**eBPF Implementation:**
+- Credential write detection: Extended `handle_security_openat()` to detect writes before reads
+- Log tampering detection:
+  - Truncate: Checks O_TRUNC flag in `handle_security_openat()`
+  - Delete: Monitors unlink in `handle_unlinkat_common()`
+  - Helper functions: `is_log_file()`, `is_legit_log_manager()` for whitelist filtering
+- Both features use existing `struct security_event` with `extra` field for sub-types
+- No new BPF maps required - leverages existing infrastructure
+
+**Userspace:**
+- Logger: Added JSON formatting for `security_cred_write` and `security_log_tamper` events
+- Config: Added `monitor_cred_write` and `monitor_log_tamper` flags (default: true)
+- Documentation: Updated MONITORING.md and SECURITY.md
+
+### Changed
+
+**MITRE ATT&CK Coverage:**
+- Increased from ~92% to ~95% of post-exploitation techniques
+- Added T1098.001 (Account Manipulation: /etc/shadow)
+- Added T1098.004 (SSH Authorized Keys Backdoor)
+- Added T1070.001 (Indicator Removal: Clear Linux Logs)
+- Updated "Enabled by Default" coverage from ~40% to ~45%
+
+**Configuration:**
+- Both new features enabled by default due to:
+  - Very low false positive rate
+  - High security value
+  - Whitelisting of legitimate system processes
+  - Minimal performance overhead
+
+### Known Limitations
+
+- **Path traversal**: `/etc/../etc/shadow` bypasses detection (syscall-level monitoring limitation)
+- **Symlinks**: Symlinks to credential/log files bypass detection
+- These are documented trade-offs for eBPF syscall monitoring vs LSM hooks
+
 ## [1.4.0] - 2026-01-06
 
 ### Added

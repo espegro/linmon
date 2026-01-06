@@ -482,6 +482,65 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 // FILE MONITORING
 // ============================================================================
 
+// Check if path is in /var/log/ directory (T1070.001 - Log Tampering)
+static __always_inline int is_log_file(const char *path)
+{
+    // Check for /var/log/ prefix (10 chars: /var/log/ + at least one char)
+    if (path[0] == '/' && path[1] == 'v' && path[2] == 'a' && path[3] == 'r' &&
+        path[4] == '/' && path[5] == 'l' && path[6] == 'o' && path[7] == 'g' &&
+        path[8] == '/' && path[9] != '\0') {
+        return 1;
+    }
+    return 0;
+}
+
+// Check if process is a whitelisted log manager (allowed to modify /var/log/*)
+static __always_inline int is_legit_log_manager(const char *comm)
+{
+    // logrotate
+    if (comm[0] == 'l' && comm[1] == 'o' && comm[2] == 'g' && comm[3] == 'r' &&
+        comm[4] == 'o' && comm[5] == 't' && comm[6] == 'a' && comm[7] == 't' &&
+        comm[8] == 'e' && comm[9] == '\0') {
+        return 1;
+    }
+
+    // rsyslogd
+    if (comm[0] == 'r' && comm[1] == 's' && comm[2] == 'y' && comm[3] == 's' &&
+        comm[4] == 'l' && comm[5] == 'o' && comm[6] == 'g' && comm[7] == 'd' &&
+        comm[8] == '\0') {
+        return 1;
+    }
+
+    // systemd-journal
+    if (comm[0] == 's' && comm[1] == 'y' && comm[2] == 's' && comm[3] == 't' &&
+        comm[4] == 'e' && comm[5] == 'm' && comm[6] == 'd' && comm[7] == '-' &&
+        comm[8] == 'j' && comm[9] == 'o' && comm[10] == 'u' && comm[11] == 'r' &&
+        comm[12] == 'n' && comm[13] == 'a' && comm[14] == 'l') {
+        return 1;  // matches systemd-journal* (truncated at 15 chars)
+    }
+
+    // syslog-ng
+    if (comm[0] == 's' && comm[1] == 'y' && comm[2] == 's' && comm[3] == 'l' &&
+        comm[4] == 'o' && comm[5] == 'g' && comm[6] == '-' && comm[7] == 'n' &&
+        comm[8] == 'g' && comm[9] == '\0') {
+        return 1;
+    }
+
+    // auditd
+    if (comm[0] == 'a' && comm[1] == 'u' && comm[2] == 'd' && comm[3] == 'i' &&
+        comm[4] == 't' && comm[5] == 'd' && comm[6] == '\0') {
+        return 1;
+    }
+
+    // linmond (LinMon itself)
+    if (comm[0] == 'l' && comm[1] == 'i' && comm[2] == 'n' && comm[3] == 'm' &&
+        comm[4] == 'o' && comm[5] == 'n' && comm[6] == 'd' && comm[7] == '\0') {
+        return 1;
+    }
+
+    return 0;  // Not a whitelisted log manager
+}
+
 // Helper function for openat monitoring (shared between tracepoint and kprobe)
 static __always_inline int handle_openat_common(const char *filename, int flags)
 {
@@ -545,7 +604,8 @@ int handle_openat_kp(struct pt_regs *ctx)
 static __always_inline int handle_unlinkat_common(const char *filename)
 {
     __u32 uid = bpf_get_current_uid_gid();
-    struct file_event *event;
+    char path[32];  // Only need to check /var/log/ prefix
+    char comm[TASK_COMM_LEN];
     struct task_struct *task;
 
     if (!should_monitor_uid(uid))
@@ -554,7 +614,46 @@ static __always_inline int handle_unlinkat_common(const char *filename)
     if (should_rate_limit(uid))
         return 0;
 
-    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    // Read path to check if it's a log file
+    if (bpf_probe_read_user_str(path, sizeof(path), filename) < 0)
+        return 0;
+
+    // Check for log file deletion (T1070.001 - Log Clearing)
+    if (is_log_file(path)) {
+        // Check if this is a whitelisted log manager
+        bpf_get_current_comm(&comm, sizeof(comm));
+        if (is_legit_log_manager(comm))
+            goto regular_file_delete;  // Log as normal file delete, not security event
+
+        // Suspicious log file deletion - log as security event
+        struct security_event *sec_event = bpf_ringbuf_reserve(&events, sizeof(*sec_event), 0);
+        if (!sec_event)
+            return 0;
+
+        task = (struct task_struct *)bpf_get_current_task();
+
+        sec_event->type = EVENT_SECURITY_LOG_TAMPER;
+        sec_event->timestamp = bpf_ktime_get_ns();
+        sec_event->pid = bpf_get_current_pid_tgid() >> 32;
+        sec_event->uid = uid;
+
+        // Fill process context (ppid, sid, pgid, tty)
+        FILL_PROCESS_CONTEXT(sec_event, task);
+        sec_event->target_pid = 0;
+        sec_event->flags = 0;
+        sec_event->port = 0;
+        sec_event->family = 0;
+        sec_event->extra = 2;  // 2=delete via unlink (1=truncate via O_TRUNC)
+        bpf_get_current_comm(&sec_event->comm, sizeof(sec_event->comm));
+        bpf_probe_read_user_str(&sec_event->filename, sizeof(sec_event->filename), filename);
+
+        bpf_ringbuf_submit(sec_event, 0);
+        return 0;
+    }
+
+regular_file_delete:
+    // Regular file deletion (not a log file, or whitelisted log manager)
+    struct file_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)
         return 0;
 
@@ -2022,12 +2121,12 @@ static __always_inline int get_cred_file_type(const char *path)
 static __always_inline int is_ldpreload_file(const char *path)
 {
     // Check for /etc/ld.so.preload (20 chars including null)
-    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && 
+    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' &&
         path[3] == 'c' && path[4] == '/' && path[5] == 'l' &&
         path[6] == 'd' && path[7] == '.' && path[8] == 's' &&
         path[9] == 'o' && path[10] == '.' && path[11] == 'p' &&
         path[12] == 'r' && path[13] == 'e' && path[14] == 'l' &&
-        path[15] == 'o' && path[16] == 'a' && path[17] == 'd' && 
+        path[15] == 'o' && path[16] == 'a' && path[17] == 'd' &&
         path[18] == '\0') {
         return 1;
     }
@@ -2081,11 +2180,85 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
         return 0;
     }
     
-    // Check for credential file READ (T1003.008)
+    // Check if this is a credential file
     cred_type = get_cred_file_type(path);
     if (cred_type == 0)
         return 0;  // Not a credential file
-    
+
+    // Check for credential file WRITE (T1098.001 - Account Manipulation)
+    // Detects writes to /etc/passwd, /etc/shadow, /etc/group, /etc/sudoers, etc.
+    if (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) {
+        uid = bpf_get_current_uid_gid();
+
+        // Rate limit
+        if (should_rate_limit(uid))
+            return 0;
+
+        // Log credential file write
+        struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+        if (!event)
+            return 0;
+        struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+
+        event->type = EVENT_SECURITY_CRED_WRITE;
+        event->timestamp = bpf_ktime_get_ns();
+        event->pid = bpf_get_current_pid_tgid() >> 32;
+        event->uid = uid;
+
+        // Fill process context (ppid, sid, pgid, tty)
+        FILL_PROCESS_CONTEXT(event, task);
+        event->target_pid = 0;
+        event->flags = flags;
+        event->port = 0;
+        event->family = 0;
+        event->extra = cred_type;  // 1=shadow, 2=gshadow, 3=sudoers, etc.
+        bpf_get_current_comm(&event->comm, sizeof(event->comm));
+        bpf_probe_read_user_str(&event->filename, sizeof(event->filename), pathname);
+
+        bpf_ringbuf_submit(event, 0);
+        return 0;  // Don't also log as READ
+    }
+
+    // Check for log file tampering (T1070.001 - Log Clearing)
+    // Detect truncation of /var/log/* files (e.g., > /var/log/auth.log)
+    if (is_log_file(path) && (flags & O_TRUNC)) {
+        uid = bpf_get_current_uid_gid();
+
+        // Rate limit
+        if (should_rate_limit(uid))
+            return 0;
+
+        // Check if this is a whitelisted log manager
+        bpf_get_current_comm(&comm, sizeof(comm));
+        if (is_legit_log_manager(comm))
+            return 0;  // Legitimate log rotation/management
+
+        // Suspicious log file truncation - log it
+        struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+        if (!event)
+            return 0;
+        struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+
+        event->type = EVENT_SECURITY_LOG_TAMPER;
+        event->timestamp = bpf_ktime_get_ns();
+        event->pid = bpf_get_current_pid_tgid() >> 32;
+        event->uid = uid;
+
+        // Fill process context (ppid, sid, pgid, tty)
+        FILL_PROCESS_CONTEXT(event, task);
+        event->target_pid = 0;
+        event->flags = flags;
+        event->port = 0;
+        event->family = 0;
+        event->extra = 1;  // 1=truncate (other types TBD: 2=delete via unlink)
+        bpf_get_current_comm(&event->comm, sizeof(event->comm));
+        bpf_probe_read_user_str(&event->filename, sizeof(event->filename), pathname);
+
+        bpf_ringbuf_submit(event, 0);
+        return 0;
+    }
+
+    // Check for credential file READ (T1003.008)
     // We want to detect READs - any open that's not purely write
     // O_RDONLY = 0, so check if NOT (O_WRONLY without O_RDWR)
     if ((flags & O_WRONLY) && !(flags & O_RDWR))

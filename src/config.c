@@ -62,6 +62,8 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_ldpreload = true;   // Default: on (critical detection)
     config->monitor_persistence = false; // Default: off (opt-in)
     config->monitor_suid = false;       // Default: off (opt-in)
+    config->monitor_cred_write = true;  // Default: on (critical detection)
+    config->monitor_log_tamper = true;  // Default: on (critical detection)
 }
 
 int load_config(struct linmon_config *config, const char *config_file)
@@ -332,6 +334,10 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->monitor_persistence = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_suid") == 0) {
             config->monitor_suid = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_cred_write") == 0) {
+            config->monitor_cred_write = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_log_tamper") == 0) {
+            config->monitor_log_tamper = (strcmp(value, "true") == 0);
         }
     }
 

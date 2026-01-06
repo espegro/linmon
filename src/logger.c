@@ -961,6 +961,12 @@ int logger_log_security_event(const struct security_event *event)
     case EVENT_SECURITY_SUID:
         event_type = "security_suid";
         break;
+    case EVENT_SECURITY_CRED_WRITE:
+        event_type = "security_cred_write";
+        break;
+    case EVENT_SECURITY_LOG_TAMPER:
+        event_type = "security_log_tamper";
+        break;
     default:
         event_type = "security_unknown";
     }
@@ -1084,6 +1090,39 @@ int logger_log_security_event(const struct security_event *event)
         fprintf(log_fp, ",\"mode\":%u", event->flags);
         fprintf(log_fp, ",\"suid\":%s", (event->flags & 04000) ? "true" : "false");
         fprintf(log_fp, ",\"sgid\":%s", (event->flags & 02000) ? "true" : "false");
+    } else if (event->type == EVENT_SECURITY_CRED_WRITE) {
+        // Credential file write (account manipulation)
+        // extra: 1=shadow, 2=gshadow, 3=sudoers, 4=ssh_config, 5=pam_config,
+        //        6=ssh_private_key, 7=ssh_authorized_keys, 8=ssh_user_config
+        const char *file_type;
+        switch (event->extra) {
+        case 1: file_type = "shadow"; break;
+        case 2: file_type = "gshadow"; break;
+        case 3: file_type = "sudoers"; break;
+        case 4: file_type = "ssh_config"; break;
+        case 5: file_type = "pam_config"; break;
+        case 6: file_type = "ssh_private_key"; break;
+        case 7: file_type = "ssh_authorized_keys"; break;
+        case 8: file_type = "ssh_user_config"; break;
+        default: file_type = "unknown"; break;
+        }
+        fprintf(log_fp, ",\"cred_file\":\"%s\",\"open_flags\":%u", file_type, event->flags);
+        if (event->filename[0]) {
+            json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+            fprintf(log_fp, ",\"path\":\"%s\"", filename_escaped);
+        }
+    } else if (event->type == EVENT_SECURITY_LOG_TAMPER) {
+        // Log file tampering (anti-forensics)
+        // extra: 1=truncate (O_TRUNC), 2=delete (unlink)
+        const char *tamper_type = (event->extra == 1) ? "truncate" : "delete";
+        fprintf(log_fp, ",\"tamper_type\":\"%s\"", tamper_type);
+        if (event->filename[0]) {
+            json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+            fprintf(log_fp, ",\"path\":\"%s\"", filename_escaped);
+        }
+        if (event->extra == 1) {
+            fprintf(log_fp, ",\"open_flags\":%u", event->flags);
+        }
     }
 
     int ret = fprintf(log_fp, "}\n");

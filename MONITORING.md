@@ -248,6 +248,65 @@ Due to BPF verifier complexity limits, SSH key and user persistence detection ha
 
 **Workaround**: Enable `monitor_files = true` for 100% coverage (warning: high event volume).
 
+#### Credential File Writes (T1098.001)
+- `security_cred_write` - Account manipulation via credential file modification
+
+Detects WRITE operations to authentication/authorization files:
+- `/etc/shadow`, `/etc/gshadow` - Password hash modification
+- `/etc/sudoers`, `/etc/sudoers.d/*` - Sudo privilege escalation
+- `/etc/ssh/*` - SSH system configuration tampering
+- `/etc/pam.d/*` - PAM authentication backdoors
+- `~/.ssh/id_*` - SSH private key replacement
+- `~/.ssh/authorized_keys` - SSH backdoor installation (T1098.004)
+- `~/.ssh/config` - SSH configuration hijacking
+
+**Fields**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_cred_write",
+  "pid": 12345,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "echo",
+  "cred_file": "ssh_authorized_keys",
+  "path": "/home/alice/.ssh/authorized_keys",
+  "open_flags": 577
+}
+```
+
+**cred_file values**: Same as `security_cred_read`: `shadow`, `gshadow`, `sudoers`, `ssh_config`, `pam_config`, `ssh_private_key`, `ssh_authorized_keys`, `ssh_user_config`
+
+**Example - SSH Backdoor Installation**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_cred_write",
+  "pid": 12345,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "bash",
+  "cred_file": "ssh_authorized_keys",
+  "path": "/root/.ssh/authorized_keys",
+  "open_flags": 577
+}
+```
+
+**Example - Password Hash Modification**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:31.456Z",
+  "type": "security_cred_write",
+  "pid": 12346,
+  "uid": 0,
+  "username": "root",
+  "comm": "vi",
+  "cred_file": "shadow",
+  "path": "/etc/shadow",
+  "open_flags": 2
+}
+```
+
 #### LD_PRELOAD Hijacking (T1574.006)
 - `security_ldpreload` - Write attempt to /etc/ld.so.preload
 
@@ -263,6 +322,63 @@ Due to BPF verifier complexity limits, SSH key and user persistence detection ha
   "open_flags": 577
 }
 ```
+
+#### Log File Tampering (T1070.001)
+- `security_log_tamper` - Log clearing / anti-forensics detection
+
+Detects attempts to cover tracks by deleting or truncating log files in `/var/log/*`:
+- Truncation: `> /var/log/auth.log` (O_TRUNC flag)
+- Deletion: `rm /var/log/secure`, `unlink(/var/log/...)`
+
+**Smart Filtering**: Whitelists legitimate log managers (logrotate, rsyslogd, systemd-journal, syslog-ng, auditd, linmond) to avoid false positives.
+
+**Fields**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_log_tamper",
+  "pid": 12345,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "bash",
+  "tamper_type": "truncate",
+  "path": "/var/log/auth.log",
+  "open_flags": 577
+}
+```
+
+**tamper_type values**: `truncate` (O_TRUNC via `> file`), `delete` (unlink/rm)
+
+**Example - Log Truncation**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_log_tamper",
+  "pid": 12345,
+  "uid": 0,
+  "username": "root",
+  "comm": "bash",
+  "tamper_type": "truncate",
+  "path": "/var/log/auth.log",
+  "open_flags": 577
+}
+```
+
+**Example - Log Deletion**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:31.456Z",
+  "type": "security_log_tamper",
+  "pid": 12346,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "rm",
+  "tamper_type": "delete",
+  "path": "/var/log/secure"
+}
+```
+
+**Note**: Operations by whitelisted log managers (logrotate, rsyslogd, systemd-journal, syslog-ng, auditd, linmond) are NOT logged as security events - they appear as regular file operations instead.
 
 #### Persistence Mechanism Detection (T1053, T1547)
 - `security_persistence` - Write attempts to persistence locations
@@ -531,6 +647,42 @@ grep '"type":"security_cred_read"' /var/log/linmon/events.json | \
 # Sudoers file access (privilege escalation recon)
 grep '"type":"security_cred_read"' /var/log/linmon/events.json | \
   jq 'select(.cred_file == "sudoers")'
+```
+
+#### Credential File Write Detection (Account Manipulation)
+```bash
+# All credential file write attempts
+grep '"type":"security_cred_write"' /var/log/linmon/events.json | jq
+
+# SSH authorized_keys backdoor installation
+grep '"type":"security_cred_write"' /var/log/linmon/events.json | \
+  jq 'select(.cred_file == "ssh_authorized_keys")'
+
+# Password hash modification
+grep '"type":"security_cred_write"' /var/log/linmon/events.json | \
+  jq 'select(.cred_file == "shadow" or .cred_file == "gshadow")'
+
+# Sudoers privilege escalation
+grep '"type":"security_cred_write"' /var/log/linmon/events.json | \
+  jq 'select(.cred_file == "sudoers")'
+```
+
+#### Log File Tampering Detection (Anti-Forensics)
+```bash
+# All log tampering attempts
+grep '"type":"security_log_tamper"' /var/log/linmon/events.json | jq
+
+# Log truncation (> /var/log/...)
+grep '"type":"security_log_tamper"' /var/log/linmon/events.json | \
+  jq 'select(.tamper_type == "truncate")'
+
+# Log deletion (rm /var/log/...)
+grep '"type":"security_log_tamper"' /var/log/linmon/events.json | \
+  jq 'select(.tamper_type == "delete")'
+
+# High-priority logs (auth, secure, audit)
+grep '"type":"security_log_tamper"' /var/log/linmon/events.json | \
+  jq 'select(.path | test("/var/log/(auth|secure|audit)"))'
 ```
 
 #### Rootkit Detection
