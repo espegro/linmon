@@ -2182,12 +2182,10 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
     
     // Check if this is a credential file
     cred_type = get_cred_file_type(path);
-    if (cred_type == 0)
-        return 0;  // Not a credential file
 
     // Check for credential file WRITE (T1098.001 - Account Manipulation)
     // Detects writes to /etc/passwd, /etc/shadow, /etc/group, /etc/sudoers, etc.
-    if (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) {
+    if (cred_type != 0 && (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC))) {
         uid = bpf_get_current_uid_gid();
 
         // Rate limit

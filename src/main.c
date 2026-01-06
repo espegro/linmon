@@ -415,7 +415,9 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     case EVENT_SECURITY_BPF:
     case EVENT_SECURITY_CRED_READ:
     case EVENT_SECURITY_LDPRELOAD:
-    case EVENT_SECURITY_SUID: {
+    case EVENT_SECURITY_SUID:
+    case EVENT_SECURITY_CRED_WRITE:
+    case EVENT_SECURITY_LOG_TAMPER: {
         // Check respective config flags
         if (type == EVENT_SECURITY_PTRACE && !global_config.monitor_ptrace)
             return 0;
