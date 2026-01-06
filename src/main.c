@@ -844,6 +844,20 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         "Credential/LDPreload monitoring (T1003.008/T1574.006)");
     if (!link) failed_count++; else attached_count++;
 
+    // Security monitoring - SUID/SGID manipulation (T1548.001)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_fchmodat_tp,
+        skel->progs.handle_fchmodat_kp,
+        "SUID/SGID monitoring (T1548.001)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - persistence mechanisms (T1053, T1547)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_persistence_openat_tp,
+        skel->progs.handle_persistence_openat_kp,
+        "Persistence monitoring (T1053, T1547)");
+    if (!link) failed_count++; else attached_count++;
+
     printf("\nAttachment summary: %d programs attached", attached_count);
     if (failed_count > 0) {
         printf(" (%d failed - some features may be unavailable)\n", failed_count);

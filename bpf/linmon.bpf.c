@@ -1970,7 +1970,7 @@ static __always_inline int get_cred_file_type(const char *path)
     // Check for ~/.ssh/* patterns (scan entire path for /.ssh/ substring)
     // Need to scan because home directory path varies (/home/user, /root, etc.)
     #pragma unroll
-    for (int i = 0; i < 240; i++) {  // MAX_FILENAME_LEN - 16
+    for (int i = 0; i < 16; i++) {  // Scan first 22 chars - covers /root/.ssh/, /home/u/.ssh/
         if (path[i] == '/' && path[i+1] == '.' &&
             path[i+2] == 's' && path[i+3] == 's' && path[i+4] == 'h' && path[i+5] == '/') {
 
@@ -2281,7 +2281,7 @@ static __always_inline int get_persistence_type(const char *path)
     // Check shell profiles and autostart (need to look for patterns anywhere in path)
     // Use substring matching for /.bashrc, /.profile, /.bash_profile, /.zshrc, /.config/autostart/
     #pragma unroll
-    for (int i = 0; i < 240; i++) {  // MAX_FILENAME_LEN - 16
+    for (int i = 0; i < 32; i++) {  // Scan first 38 chars - covers /home/username/.bashrc
         if (path[i] == '/' && path[i+1] == '.') {
             // Check .bashrc
             if (path[i+2] == 'b' && path[i+3] == 'a' && path[i+4] == 's' && path[i+5] == 'h' &&
