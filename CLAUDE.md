@@ -71,11 +71,27 @@ LinMon adds a `process_name` field to events containing the basename of the exec
   - SELinux/AppArmor blocks `/proc` access
 
 **Implementation** (`src/logger.c:get_process_name_from_proc()`):
-- Uses `readlink()` on `/proc/<pid>/exe` symlink (no CAP_SYS_PTRACE needed - only symlink read permission)
+- Uses `readlink()` on `/proc/<pid>/exe` symlink to get actual executable path
+- Requires CAP_SYS_PTRACE to read `/proc/<pid>/exe` for other users (retained after privilege drop)
 - Gets actual executable path (not argv[0] which can be manipulated)
 - Extracts basename using `strrchr()`
+- Detects deleted executables (symlink marked with " (deleted)" suffix)
 - Returns false on any failure → field omitted from JSON
 - Fail-safe: Events logged without `process_name` if unavailable
+
+**Process Masquerading Detection** (`src/logger.c:is_comm_mismatch()`):
+- Compares kernel comm name (from eBPF) with actual process_name from `/proc/<pid>/exe`
+- Smart prefix matching: handles TASK_COMM_LEN truncation (max 15 chars)
+  - If process_name > 15 chars: compares first 15 chars only
+  - If process_name <= 15 chars: full string comparison
+- `comm_mismatch` field only logged when mismatch detected (sparse field)
+- Detects malware masquerading as trusted processes (e.g., prctl(PR_SET_NAME, "systemd"))
+
+**Deleted Executable Detection** (`src/logger.c:get_process_name_from_proc()`):
+- Detects when process executable has been deleted from disk
+- Checks for " (deleted)" suffix in `/proc/<pid>/exe` symlink
+- `deleted_executable` field only logged when detected (sparse field)
+- Indicator of fileless malware or post-exploitation cleanup
 
 **Startup Check** (`src/main.c`):
 - Tests `/proc/1/cmdline` access at daemon startup
@@ -90,6 +106,13 @@ LinMon monitors multiple event types:
 2. **File Events**: Create, modify, delete operations
 3. **Network Events**: TCP connections (`EVENT_NET_CONNECT_TCP`, `EVENT_NET_ACCEPT_TCP`), UDP traffic, vsock (`EVENT_NET_VSOCK_CONNECT`)
 4. **Privilege Events**: `setuid`, `setgid`, sudo usage
+5. **Security Events**: Process injection (ptrace), kernel modules, memfd, bind shells, container escape, fileless execution, eBPF rootkits, credential reads, LD_PRELOAD hijacking
+
+**Security Detection Fields** (v1.3.3+):
+- `comm_mismatch` (boolean): Detects process masquerading via prctl() comm name changes
+- `deleted_executable` (boolean): Identifies processes running from deleted files
+- Both fields are sparse (only present when detection occurs)
+- Applied to network, privilege, and security events
 
 All events can be selectively enabled/disabled via configuration file.
 
@@ -311,15 +334,27 @@ LinMon implements defense-in-depth security. See `SECURITY.md` for full details.
 
 1. **Load BPF programs** (requires `CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`)
 2. **Open log file** (requires write access to `/var/log/linmon/`)
-3. **Drop UID/GID** to `nobody:nogroup` (UID/GID 65534) - requires `CAP_SETUID`/`CAP_SETGID`
-4. **Drop ALL capabilities** - daemon runs with zero capabilities after this point
-5. **Verify cannot regain root** - `setuid(0)` must fail
+3. **Prepare capabilities** - Set CAP_SYS_PTRACE as ambient capability (requires root)
+   - Sets CAP_SYS_PTRACE in PERMITTED, EFFECTIVE, and INHERITABLE sets
+   - Raises ambient capability: `prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SYS_PTRACE)`
+   - Sets securebits: `SECBIT_KEEP_CAPS` + `SECBIT_NO_SETUID_FIXUP` (both locked)
+   - Prevents capability clearing on setuid()
+4. **Drop UID/GID** to `nobody:nogroup` (UID/GID 65534) - requires `CAP_SETUID`/`CAP_SETGID`
+5. **Drop dangerous capabilities** - Remove CAP_SETUID and CAP_SETGID from PERMITTED and EFFECTIVE
+   - Prevents regaining root privileges
+   - Retains only CAP_SYS_PTRACE (for reading `/proc/<pid>/exe` across users)
+6. **Verify cannot regain root** - `setuid(0)` must fail
 
 After privilege drop, daemon **cannot**:
 - Load new BPF programs
 - Modify system configuration
-- Access files outside `/var/log/linmon/`
-- Regain root privileges
+- Access files outside `/var/log/linmon/` and `/proc`
+- Regain root privileges (CAP_SETUID/CAP_SETGID explicitly dropped)
+
+**Retained capability**: CAP_SYS_PTRACE
+- Purpose: Read `/proc/<pid>/exe` for all users (required for masquerading detection)
+- Implementation: Ambient capabilities (kernel >= 4.3)
+- Security: Read-only access to `/proc`, cannot ptrace processes or modify memory
 
 ### Configuration Security
 
