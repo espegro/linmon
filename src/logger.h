@@ -45,6 +45,9 @@ int logger_log_privilege_event(const struct privilege_event *event);
 // Log a security monitoring event (MITRE ATT&CK detection)
 int logger_log_security_event(const struct security_event *event);
 
+// Log a persistence mechanism event (T1053, T1547)
+int logger_log_persistence_event(const struct persistence_event *event);
+
 // Get logger file pointer (for daemon lifecycle events)
 FILE *logger_get_fp(void);
 

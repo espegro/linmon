@@ -366,3 +366,25 @@ monitor_execveat = false
 # Warning: System tools using eBPF will trigger (bpftool, tc, ip, bcc tools)
 # Recommendation: Enable on high-security systems, whitelist known tools
 monitor_bpf = false
+
+# Monitor persistence mechanisms - T1053, T1547 Persistence detection
+# Logs: security_persistence events
+# Detects: Writes to cron, systemd services, shell profiles, init scripts, autostart
+# Locations: /etc/cron.d/*, /var/spool/cron/*, /etc/systemd/system/*,
+#            /usr/lib/systemd/system/*, ~/.bashrc, ~/.profile, ~/.zshrc,
+#            ~/.config/autostart/*, /etc/rc.local, /etc/init.d/*
+# Use case: Detect attackers establishing persistence after compromise
+# Warning: Legitimate admin tasks write to these locations
+# Recommendation: Enable on production servers, correlate with user activity
+# persistence_type values: cron, systemd, shell_profile, init, autostart
+monitor_persistence = false
+
+# Monitor SUID/SGID manipulation - T1548.001 Privilege Escalation detection
+# Logs: security_suid events
+# Detects: chmod operations that set SUID (04000) or SGID (02000) bits
+# Use case: Detect privilege escalation setup (chmod +s for persistent root access)
+# Note: Legitimate package managers may set SUID on some binaries
+# Warning: Low noise - SUID changes are rare, mostly during package installs
+# Recommendation: Enable on high-security systems, alert on unexpected paths
+# Event fields: path, mode (full mode bits), suid (true/false), sgid (true/false)
+monitor_suid = false

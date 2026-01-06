@@ -1918,48 +1918,101 @@ static __always_inline int is_legit_cred_reader(const char *comm)
 //   3 = /etc/sudoers or /etc/sudoers.d/*
 //   4 = /etc/ssh/* (SSH config files)
 //   5 = /etc/pam.d/* (PAM config files)
+//   6 = ~/.ssh/id_* (SSH private keys)
+//   7 = ~/.ssh/authorized_keys (SSH authorized keys backdoor)
+//   8 = ~/.ssh/config (SSH user config)
 static __always_inline int get_cred_file_type(const char *path)
 {
-    // All sensitive files start with /etc/
-    if (path[0] != '/' || path[1] != 'e' || path[2] != 't' ||
-        path[3] != 'c' || path[4] != '/')
-        return 0;
+    // Check /etc/* files first
+    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' &&
+        path[3] == 'c' && path[4] == '/') {
 
-    // After /etc/ (index 5)
-    char c5 = path[5];
+        // After /etc/ (index 5)
+        char c5 = path[5];
 
-    // Check for /etc/shadow
-    if (c5 == 's' && path[6] == 'h' && path[7] == 'a' && path[8] == 'd' &&
-        path[9] == 'o' && path[10] == 'w' && path[11] == '\0') {
-        return 1;  // /etc/shadow
+        // Check for /etc/shadow
+        if (c5 == 's' && path[6] == 'h' && path[7] == 'a' && path[8] == 'd' &&
+            path[9] == 'o' && path[10] == 'w' && path[11] == '\0') {
+            return 1;  // /etc/shadow
+        }
+
+        // Check for /etc/gshadow
+        if (c5 == 'g' && path[6] == 's' && path[7] == 'h' && path[8] == 'a' &&
+            path[9] == 'd' && path[10] == 'o' && path[11] == 'w' && path[12] == '\0') {
+            return 2;  // /etc/gshadow
+        }
+
+        // Check for /etc/sudoers (exact) or /etc/sudoers.d/* (prefix)
+        if (c5 == 's' && path[6] == 'u' && path[7] == 'd' && path[8] == 'o' &&
+            path[9] == 'e' && path[10] == 'r' && path[11] == 's') {
+            // /etc/sudoers (exact match)
+            if (path[12] == '\0')
+                return 3;
+            // /etc/sudoers.d/* (directory prefix)
+            if (path[12] == '.' && path[13] == 'd' && path[14] == '/')
+                return 3;
+        }
+
+        // Check for /etc/ssh/* (prefix match)
+        if (c5 == 's' && path[6] == 's' && path[7] == 'h' && path[8] == '/') {
+            return 4;  // /etc/ssh/*
+        }
+
+        // Check for /etc/pam.d/* (prefix match)
+        if (c5 == 'p' && path[6] == 'a' && path[7] == 'm' && path[8] == '.' &&
+            path[9] == 'd' && path[10] == '/') {
+            return 5;  // /etc/pam.d/*
+        }
+
+        return 0;  // Other /etc/ file
     }
 
-    // Check for /etc/gshadow
-    if (c5 == 'g' && path[6] == 's' && path[7] == 'h' && path[8] == 'a' &&
-        path[9] == 'd' && path[10] == 'o' && path[11] == 'w' && path[12] == '\0') {
-        return 2;  // /etc/gshadow
-    }
+    // Check for ~/.ssh/* patterns (scan entire path for /.ssh/ substring)
+    // Need to scan because home directory path varies (/home/user, /root, etc.)
+    #pragma unroll
+    for (int i = 0; i < 240; i++) {  // MAX_FILENAME_LEN - 16
+        if (path[i] == '/' && path[i+1] == '.' &&
+            path[i+2] == 's' && path[i+3] == 's' && path[i+4] == 'h' && path[i+5] == '/') {
 
-    // Check for /etc/sudoers (exact) or /etc/sudoers.d/* (prefix)
-    if (c5 == 's' && path[6] == 'u' && path[7] == 'd' && path[8] == 'o' &&
-        path[9] == 'e' && path[10] == 'r' && path[11] == 's') {
-        // /etc/sudoers (exact match)
-        if (path[12] == '\0')
-            return 3;
-        // /etc/sudoers.d/* (directory prefix)
-        if (path[12] == '.' && path[13] == 'd' && path[14] == '/')
-            return 3;
-    }
+            int ssh_start = i + 6;  // After /.ssh/
 
-    // Check for /etc/ssh/* (prefix match)
-    if (c5 == 's' && path[6] == 's' && path[7] == 'h' && path[8] == '/') {
-        return 4;  // /etc/ssh/*
-    }
+            // Check for id_rsa, id_ed25519, id_ecdsa (private keys)
+            if (path[ssh_start] == 'i' && path[ssh_start+1] == 'd' && path[ssh_start+2] == '_') {
+                // id_rsa*
+                if (path[ssh_start+3] == 'r' && path[ssh_start+4] == 's' && path[ssh_start+5] == 'a') {
+                    return 6;  // ssh_private_key
+                }
+                // id_ed25519*
+                if (path[ssh_start+3] == 'e' && path[ssh_start+4] == 'd' && path[ssh_start+5] == '2' &&
+                    path[ssh_start+6] == '5' && path[ssh_start+7] == '5' && path[ssh_start+8] == '1' &&
+                    path[ssh_start+9] == '9') {
+                    return 6;  // ssh_private_key
+                }
+                // id_ecdsa*
+                if (path[ssh_start+3] == 'e' && path[ssh_start+4] == 'c' && path[ssh_start+5] == 'd' &&
+                    path[ssh_start+6] == 's' && path[ssh_start+7] == 'a') {
+                    return 6;  // ssh_private_key
+                }
+            }
 
-    // Check for /etc/pam.d/* (prefix match)
-    if (c5 == 'p' && path[6] == 'a' && path[7] == 'm' && path[8] == '.' &&
-        path[9] == 'd' && path[10] == '/') {
-        return 5;  // /etc/pam.d/*
+            // Check for authorized_keys
+            if (path[ssh_start] == 'a' && path[ssh_start+1] == 'u' && path[ssh_start+2] == 't' &&
+                path[ssh_start+3] == 'h' && path[ssh_start+4] == 'o' && path[ssh_start+5] == 'r' &&
+                path[ssh_start+6] == 'i' && path[ssh_start+7] == 'z' && path[ssh_start+8] == 'e' &&
+                path[ssh_start+9] == 'd' && path[ssh_start+10] == '_' && path[ssh_start+11] == 'k' &&
+                path[ssh_start+12] == 'e' && path[ssh_start+13] == 'y' && path[ssh_start+14] == 's') {
+                return 7;  // ssh_authorized_keys
+            }
+
+            // Check for config
+            if (path[ssh_start] == 'c' && path[ssh_start+1] == 'o' && path[ssh_start+2] == 'n' &&
+                path[ssh_start+3] == 'f' && path[ssh_start+4] == 'i' && path[ssh_start+5] == 'g' &&
+                path[ssh_start+6] == '\0') {
+                return 8;  // ssh_user_config
+            }
+
+            return 0;  // Other file in .ssh directory
+        }
     }
 
     return 0;  // Not a sensitive file
@@ -2090,4 +2143,251 @@ int handle_security_openat_kp(struct pt_regs *ctx)
     const char *pathname = (const char *)PT_REGS_PARM2(ctx);
     int flags = (int)PT_REGS_PARM3(ctx);
     return handle_security_openat(dfd, pathname, flags);
+}
+
+// SUID/SGID manipulation detection (T1548.001)
+// Detects chmod operations that set SUID (04000) or SGID (02000) bits
+static __always_inline int handle_fchmodat_common(int dfd, const char *pathname, __u32 mode)
+{
+    char path[MAX_FILENAME_LEN];
+    __u32 uid;
+
+    if (!pathname)
+        return 0;
+
+    // Only interested in SUID (04000) or SGID (02000) changes
+    if (!(mode & 06000))  // Check for S_ISUID | S_ISGID
+        return 0;
+
+    // Read path
+    if (bpf_probe_read_user_str(path, sizeof(path), pathname) < 0)
+        return 0;
+
+    uid = bpf_get_current_uid_gid();
+
+    // Rate limiting check
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Reserve event
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    // Fill event
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    event->type = EVENT_SECURITY_SUID;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
+
+    event->target_pid = 0;
+    event->flags = mode;  // Store new mode with SUID/SGID bits
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    __builtin_memcpy(event->filename, path, sizeof(event->filename));
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_fchmodat")
+int handle_fchmodat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int dfd = (int)ctx->args[0];
+    const char *pathname = (const char *)ctx->args[1];
+    __u32 mode = (__u32)ctx->args[2];
+
+    return handle_fchmodat_common(dfd, pathname, mode);
+}
+
+SEC("kprobe/__x64_sys_fchmodat")
+int handle_fchmodat_kp(struct pt_regs *ctx)
+{
+    int dfd = (int)PT_REGS_PARM1(ctx);
+    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
+    __u32 mode = (__u32)PT_REGS_PARM3(ctx);
+
+    return handle_fchmodat_common(dfd, pathname, mode);
+}
+// Persistence mechanism detection (T1053, T1547)
+// Check if path is a persistence location
+// Returns persistence type:
+//   0 = not persistence
+//   1 = cron (/etc/cron.d/*, /var/spool/cron/*)
+//   2 = systemd (/etc/systemd/system/*, /usr/lib/systemd/system/*)
+//   3 = shell profile (~/.bashrc, ~/.profile, ~/.zshrc, etc.)
+//   4 = init (/etc/rc.local, /etc/init.d/*)
+//   5 = autostart (~/.config/autostart/*)
+static __always_inline int get_persistence_type(const char *path)
+{
+    // Check /etc/* paths first
+    if (path[0] == '/' && path[1] == 'e' && path[2] == 't' && path[3] == 'c' && path[4] == '/') {
+        // /etc/cron.d/
+        if (path[5] == 'c' && path[6] == 'r' && path[7] == 'o' && path[8] == 'n' &&
+            path[9] == '.' && path[10] == 'd' && path[11] == '/') {
+            return 1;
+        }
+
+        // /etc/systemd/system/
+        if (path[5] == 's' && path[6] == 'y' && path[7] == 's' && path[8] == 't' &&
+            path[9] == 'e' && path[10] == 'm' && path[11] == 'd' && path[12] == '/') {
+            if (path[13] == 's' && path[14] == 'y' && path[15] == 's' && path[16] == 't' &&
+                path[17] == 'e' && path[18] == 'm' && path[19] == '/') {
+                return 2;
+            }
+        }
+
+        // /etc/rc.local
+        if (path[5] == 'r' && path[6] == 'c' && path[7] == '.' &&
+            path[8] == 'l' && path[9] == 'o' && path[10] == 'c' &&
+            path[11] == 'a' && path[12] == 'l' && path[13] == '\0') {
+            return 4;
+        }
+
+        // /etc/init.d/*
+        if (path[5] == 'i' && path[6] == 'n' && path[7] == 'i' && path[8] == 't' &&
+            path[9] == '.' && path[10] == 'd' && path[11] == '/') {
+            return 4;
+        }
+    }
+
+    // Check /var/spool/cron/*
+    if (path[0] == '/' && path[1] == 'v' && path[2] == 'a' && path[3] == 'r' && path[4] == '/') {
+        if (path[5] == 's' && path[6] == 'p' && path[7] == 'o' && path[8] == 'o' && path[9] == 'l' &&
+            path[10] == '/' && path[11] == 'c' && path[12] == 'r' && path[13] == 'o' && path[14] == 'n' &&
+            path[15] == '/') {
+            return 1;
+        }
+    }
+
+    // Check /usr/lib/systemd/system/*
+    if (path[0] == '/' && path[1] == 'u' && path[2] == 's' && path[3] == 'r' && path[4] == '/') {
+        if (path[5] == 'l' && path[6] == 'i' && path[7] == 'b' && path[8] == '/' &&
+            path[9] == 's' && path[10] == 'y' && path[11] == 's' && path[12] == 't' &&
+            path[13] == 'e' && path[14] == 'm' && path[15] == 'd' && path[16] == '/') {
+            if (path[17] == 's' && path[18] == 'y' && path[19] == 's' && path[20] == 't' &&
+                path[21] == 'e' && path[22] == 'm' && path[23] == '/') {
+                return 2;
+            }
+        }
+    }
+
+    // Check shell profiles and autostart (need to look for patterns anywhere in path)
+    // Use substring matching for /.bashrc, /.profile, /.bash_profile, /.zshrc, /.config/autostart/
+    #pragma unroll
+    for (int i = 0; i < 240; i++) {  // MAX_FILENAME_LEN - 16
+        if (path[i] == '/' && path[i+1] == '.') {
+            // Check .bashrc
+            if (path[i+2] == 'b' && path[i+3] == 'a' && path[i+4] == 's' && path[i+5] == 'h' &&
+                path[i+6] == 'r' && path[i+7] == 'c' && path[i+8] == '\0') {
+                return 3;
+            }
+            // Check .profile
+            if (path[i+2] == 'p' && path[i+3] == 'r' && path[i+4] == 'o' && path[i+5] == 'f' &&
+                path[i+6] == 'i' && path[i+7] == 'l' && path[i+8] == 'e' && path[i+9] == '\0') {
+                return 3;
+            }
+            // Check .bash_profile
+            if (path[i+2] == 'b' && path[i+3] == 'a' && path[i+4] == 's' && path[i+5] == 'h' &&
+                path[i+6] == '_' && path[i+7] == 'p' && path[i+8] == 'r' && path[i+9] == 'o' &&
+                path[i+10] == 'f' && path[i+11] == 'i' && path[i+12] == 'l' && path[i+13] == 'e' &&
+                path[i+14] == '\0') {
+                return 3;
+            }
+            // Check .zshrc
+            if (path[i+2] == 'z' && path[i+3] == 's' && path[i+4] == 'h' && path[i+5] == 'r' &&
+                path[i+6] == 'c' && path[i+7] == '\0') {
+                return 3;
+            }
+            // Check .config/autostart/
+            if (path[i+2] == 'c' && path[i+3] == 'o' && path[i+4] == 'n' && path[i+5] == 'f' &&
+                path[i+6] == 'i' && path[i+7] == 'g' && path[i+8] == '/') {
+                if (path[i+9] == 'a' && path[i+10] == 'u' && path[i+11] == 't' && path[i+12] == 'o' &&
+                    path[i+13] == 's' && path[i+14] == 't' && path[i+15] == 'a' && path[i+16] == 'r' &&
+                    path[i+17] == 't' && path[i+18] == '/') {
+                    return 5;
+                }
+            }
+        }
+    }
+
+    return 0;  // Not a persistence location
+}
+
+// Handler for persistence location monitoring
+static __always_inline int handle_persistence_openat(int dfd, const char *pathname, int flags)
+{
+    char path[MAX_FILENAME_LEN];
+    int persist_type;
+    __u32 uid;
+
+    if (!pathname)
+        return 0;
+
+    // Read path from userspace
+    if (bpf_probe_read_user_str(path, sizeof(path), pathname) < 0)
+        return 0;
+
+    // Check if this is a persistence location
+    persist_type = get_persistence_type(path);
+    if (persist_type == 0)
+        return 0;  // Not persistence
+
+    // Only interested in WRITE operations (create, modify)
+    if (!(flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)))
+        return 0;
+
+    uid = bpf_get_current_uid_gid();
+
+    // Rate limiting check
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Reserve event
+    struct persistence_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    // Fill event
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    event->type = EVENT_SECURITY_PERSISTENCE;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    __builtin_memcpy(event->path, path, sizeof(event->path));
+    event->flags = flags;
+    event->persistence_type = persist_type;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_openat")
+int handle_persistence_openat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int dfd = (int)ctx->args[0];
+    const char *pathname = (const char *)ctx->args[1];
+    int flags = (int)ctx->args[2];
+
+    return handle_persistence_openat(dfd, pathname, flags);
+}
+
+SEC("kprobe/__x64_sys_openat")
+int handle_persistence_openat_kp(struct pt_regs *ctx)
+{
+    int dfd = (int)PT_REGS_PARM1(ctx);
+    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
+    int flags = (int)PT_REGS_PARM3(ctx);
+
+    return handle_persistence_openat(dfd, pathname, flags);
 }

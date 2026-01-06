@@ -172,14 +172,17 @@ LinMon logs the following event types:
 
 LinMon detects various attack techniques mapped to the MITRE ATT&CK framework.
 
-#### Credential File Access (T1003.008)
-- `security_cred_read` - Suspicious read of authentication/authorization files
+#### Credential File Access (T1003.008, T1552.004, T1098.004)
+- `security_cred_read` - Suspicious read/write of authentication/authorization files
 
-Monitors reads of sensitive files by non-whitelisted processes:
+Monitors access to sensitive files by non-whitelisted processes:
 - `/etc/shadow`, `/etc/gshadow` - Password hashes
 - `/etc/sudoers`, `/etc/sudoers.d/*` - Sudo configuration
-- `/etc/ssh/*` - SSH configuration, authorized_keys
+- `/etc/ssh/*` - SSH system configuration, host keys
 - `/etc/pam.d/*` - PAM authentication configuration
+- `~/.ssh/id_*` - SSH private keys (T1552.004 - Private Keys)
+- `~/.ssh/authorized_keys` - SSH authorized keys (T1098.004 - SSH Backdoor)
+- `~/.ssh/config` - SSH user configuration (ProxyCommand abuse)
 
 **Fields**:
 ```json
@@ -196,7 +199,37 @@ Monitors reads of sensitive files by non-whitelisted processes:
 }
 ```
 
-**cred_file values**: `shadow`, `gshadow`, `sudoers`, `ssh_config`, `pam_config`
+**cred_file values**: `shadow`, `gshadow`, `sudoers`, `ssh_config`, `pam_config`, `ssh_private_key`, `ssh_authorized_keys`, `ssh_user_config`
+
+**Example - SSH Private Key Theft**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_cred_read",
+  "pid": 12346,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "cat",
+  "cred_file": "ssh_private_key",
+  "path": "/home/alice/.ssh/id_rsa",
+  "open_flags": 0
+}
+```
+
+**Example - SSH Backdoor (authorized_keys write)**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:31.456Z",
+  "type": "security_cred_read",
+  "pid": 12347,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "echo",
+  "cred_file": "ssh_authorized_keys",
+  "path": "/home/alice/.ssh/authorized_keys",
+  "open_flags": 577
+}
+```
 
 #### LD_PRELOAD Hijacking (T1574.006)
 - `security_ldpreload` - Write attempt to /etc/ld.so.preload
@@ -213,6 +246,120 @@ Monitors reads of sensitive files by non-whitelisted processes:
   "open_flags": 577
 }
 ```
+
+#### Persistence Mechanism Detection (T1053, T1547)
+- `security_persistence` - Write attempts to persistence locations
+
+**Detects writes to:**
+- **Cron**: `/etc/cron.d/*`, `/var/spool/cron/*`
+- **Systemd**: `/etc/systemd/system/*`, `/usr/lib/systemd/system/*`
+- **Shell profiles**: `~/.bashrc`, `~/.profile`, `~/.bash_profile`, `~/.zshrc`
+- **Init scripts**: `/etc/rc.local`, `/etc/init.d/*`
+- **Autostart**: `~/.config/autostart/*`
+
+**Fields**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_persistence",
+  "pid": 12345,
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "echo",
+  "path": "/etc/cron.d/backdoor",
+  "persistence_type": "cron",
+  "open_flags": 577
+}
+```
+
+**persistence_type values**: `cron`, `systemd`, `shell_profile`, `init`, `autostart`
+
+**Example - Cron Persistence**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_persistence",
+  "pid": 12345,
+  "uid": 0,
+  "username": "root",
+  "comm": "echo",
+  "path": "/etc/cron.d/backdoor",
+  "persistence_type": "cron",
+  "open_flags": 577
+}
+```
+
+**Example - Shell Profile Persistence**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:31.456Z",
+  "type": "security_persistence",
+  "pid": 12346,
+  "uid": 1000,
+  "username": "alice",
+  "comm": "echo",
+  "path": "/home/alice/.bashrc",
+  "persistence_type": "shell_profile",
+  "open_flags": 577
+}
+```
+
+**Example - Systemd Persistence**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:32.789Z",
+  "type": "security_persistence",
+  "pid": 12347,
+  "uid": 0,
+  "username": "root",
+  "comm": "vi",
+  "path": "/etc/systemd/system/backdoor.service",
+  "persistence_type": "systemd",
+  "open_flags": 577
+}
+```
+
+#### SUID/SGID Manipulation (T1548.001)
+- `security_suid` - chmod operations that set SUID or SGID bits
+
+**Fields**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_suid",
+  "pid": 12345,
+  "uid": 0,
+  "username": "root",
+  "comm": "chmod",
+  "path": "/tmp/exploit",
+  "mode": 35309,
+  "suid": true,
+  "sgid": false
+}
+```
+
+**Field descriptions**:
+- `mode` - Full mode bits (e.g., 35309 = 0100755 with SUID bit 04000)
+- `suid` - Boolean, true if SUID bit (04000) is set
+- `sgid` - Boolean, true if SGID bit (02000) is set
+
+**Example - SUID Binary Creation**:
+```json
+{
+  "timestamp": "2024-12-23T10:15:30.123Z",
+  "type": "security_suid",
+  "pid": 12345,
+  "uid": 0,
+  "username": "root",
+  "comm": "chmod",
+  "path": "/tmp/backdoor",
+  "mode": 35309,
+  "suid": true,
+  "sgid": false
+}
+```
+
+**Use case**: Detect attackers creating SUID binaries for persistent root access after initial compromise.
 
 #### Other Security Events
 - `security_ptrace` - T1055 Process Injection (debugger attachment)
@@ -392,6 +539,54 @@ grep '"type":"security_execveat"' /var/log/linmon/events.json | jq
 # Correlation: memfd followed by execveat (fileless attack chain)
 grep -E '"type":"security_(memfd|execveat)"' /var/log/linmon/events.json | \
   jq -r '[.timestamp, .type, .pid, .comm] | @tsv'
+```
+
+#### Persistence Detection
+```bash
+# All persistence mechanism writes
+grep '"type":"security_persistence"' /var/log/linmon/events.json | jq
+
+# Cron job persistence
+grep '"type":"security_persistence"' /var/log/linmon/events.json | \
+  jq 'select(.persistence_type == "cron")'
+
+# Systemd service persistence
+grep '"type":"security_persistence"' /var/log/linmon/events.json | \
+  jq 'select(.persistence_type == "systemd")'
+
+# Shell profile persistence (auto-execution on login)
+grep '"type":"security_persistence"' /var/log/linmon/events.json | \
+  jq 'select(.persistence_type == "shell_profile")'
+
+# Summary: persistence attempts by type
+grep '"type":"security_persistence"' /var/log/linmon/events.json | \
+  jq -r '.persistence_type' | sort | uniq -c
+
+# Timeline of persistence changes
+grep '"type":"security_persistence"' /var/log/linmon/events.json | \
+  jq -r '[.timestamp, .persistence_type, .path, .username] | @tsv' | column -t
+```
+
+#### SUID/SGID Manipulation Detection
+```bash
+# All SUID/SGID changes
+grep '"type":"security_suid"' /var/log/linmon/events.json | jq
+
+# Only SUID bit changes (exclude SGID-only)
+grep '"type":"security_suid"' /var/log/linmon/events.json | \
+  jq 'select(.suid == true)'
+
+# SUID changes in suspicious locations
+grep '"type":"security_suid"' /var/log/linmon/events.json | \
+  jq 'select(.path | test("/tmp/|/dev/shm/|/home/"))'
+
+# List all SUID binaries created
+grep '"type":"security_suid"' /var/log/linmon/events.json | \
+  jq -r 'select(.suid == true) | [.timestamp, .path, .username] | @tsv' | column -t
+
+# Both SUID and SGID set (rare, very suspicious)
+grep '"type":"security_suid"' /var/log/linmon/events.json | \
+  jq 'select(.suid == true and .sgid == true)'
 ```
 
 ### User Activity Tracking

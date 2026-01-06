@@ -60,6 +60,8 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_bpf = false;
     config->monitor_cred_read = true;   // Default: on (low noise, high value)
     config->monitor_ldpreload = true;   // Default: on (critical detection)
+    config->monitor_persistence = false; // Default: off (opt-in)
+    config->monitor_suid = false;       // Default: off (opt-in)
 }
 
 int load_config(struct linmon_config *config, const char *config_file)
@@ -326,6 +328,10 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->monitor_cred_read = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "monitor_ldpreload") == 0) {
             config->monitor_ldpreload = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_persistence") == 0) {
+            config->monitor_persistence = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "monitor_suid") == 0) {
+            config->monitor_suid = (strcmp(value, "true") == 0);
         }
     }
 

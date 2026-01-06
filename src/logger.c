@@ -958,6 +958,9 @@ int logger_log_security_event(const struct security_event *event)
     case EVENT_SECURITY_LDPRELOAD:
         event_type = "security_ldpreload";
         break;
+    case EVENT_SECURITY_SUID:
+        event_type = "security_suid";
+        break;
     default:
         event_type = "security_unknown";
     }
@@ -1047,7 +1050,8 @@ int logger_log_security_event(const struct security_event *event)
     } else if (event->type == EVENT_SECURITY_BPF) {
         fprintf(log_fp, ",\"bpf_cmd\":%u", event->extra);
     } else if (event->type == EVENT_SECURITY_CRED_READ) {
-        // extra: 1=shadow, 2=gshadow, 3=sudoers, 4=ssh_config, 5=pam_config
+        // extra: 1=shadow, 2=gshadow, 3=sudoers, 4=ssh_config, 5=pam_config,
+        //        6=ssh_private_key, 7=ssh_authorized_keys, 8=ssh_user_config
         const char *file_type;
         switch (event->extra) {
         case 1: file_type = "shadow"; break;
@@ -1055,6 +1059,9 @@ int logger_log_security_event(const struct security_event *event)
         case 3: file_type = "sudoers"; break;
         case 4: file_type = "ssh_config"; break;
         case 5: file_type = "pam_config"; break;
+        case 6: file_type = "ssh_private_key"; break;
+        case 7: file_type = "ssh_authorized_keys"; break;
+        case 8: file_type = "ssh_user_config"; break;
         default: file_type = "unknown"; break;
         }
         fprintf(log_fp, ",\"cred_file\":\"%s\",\"open_flags\":%u", file_type, event->flags);
@@ -1068,6 +1075,15 @@ int logger_log_security_event(const struct security_event *event)
             json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
             fprintf(log_fp, ",\"path\":\"%s\"", filename_escaped);
         }
+    } else if (event->type == EVENT_SECURITY_SUID) {
+        // Output file path and mode bits
+        if (event->filename[0]) {
+            json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+            fprintf(log_fp, ",\"path\":\"%s\"", filename_escaped);
+        }
+        fprintf(log_fp, ",\"mode\":%u", event->flags);
+        fprintf(log_fp, ",\"suid\":%s", (event->flags & 04000) ? "true" : "false");
+        fprintf(log_fp, ",\"sgid\":%s", (event->flags & 02000) ? "true" : "false");
     }
 
     int ret = fprintf(log_fp, "}\n");
@@ -1081,6 +1097,87 @@ int logger_log_security_event(const struct security_event *event)
     if (enable_syslog) {
         syslog(LOG_WARNING, "%s: pid=%u uid=%u comm=%s",
                event_type, event->pid, event->uid, event->comm);
+    }
+
+    return 0;
+}
+
+int logger_log_persistence_event(const struct persistence_event *event)
+{
+    const char *persistence_names[] = {
+        "unknown",        // 0
+        "cron",          // 1
+        "systemd",       // 2
+        "shell_profile", // 3
+        "init",          // 4
+        "autostart"      // 5
+    };
+
+    char timestamp[64];
+    char hostname_escaped[256 * 6];
+    char comm_escaped[TASK_COMM_LEN * 6];
+    char path_escaped[MAX_FILENAME_LEN * 6];
+    char username[USERNAME_MAX];
+    char username_escaped[USERNAME_MAX * 6];
+
+    if (!log_fp)
+        return -EINVAL;
+
+    format_timestamp(timestamp, sizeof(timestamp));
+
+    json_escape(event->comm, comm_escaped, sizeof(comm_escaped));
+    json_escape(event->path, path_escaped, sizeof(path_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
+
+    if (enable_resolve_usernames) {
+        userdb_resolve(event->uid, username, sizeof(username));
+        json_escape(username, username_escaped, sizeof(username_escaped));
+    }
+
+    // Get sequence number for tamper detection
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
+    pthread_mutex_lock(&log_mutex);
+
+    fprintf(log_fp,
+            "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"security_persistence\",\"pid\":%u,\"ppid\":%u,"
+            "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
+            seq, timestamp, hostname_escaped, event->pid, event->ppid,
+            event->sid, event->pgid, event->uid);
+
+    if (enable_resolve_usernames) {
+        fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
+    }
+
+    // TTY field
+    if (event->tty[0]) {
+        char tty_escaped[16 * 6];
+        json_escape(event->tty, tty_escaped, sizeof(tty_escaped));
+        fprintf(log_fp, ",\"tty\":\"%s\"", tty_escaped);
+    } else {
+        fprintf(log_fp, ",\"tty\":\"\"");
+    }
+
+    fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
+    fprintf(log_fp, ",\"path\":\"%s\"", path_escaped);
+    fprintf(log_fp, ",\"persistence_type\":\"%s\"", persistence_names[event->persistence_type]);
+    fprintf(log_fp, ",\"open_flags\":%u", event->flags);
+
+    int ret = fprintf(log_fp, "}\n");
+
+    pthread_mutex_unlock(&log_mutex);
+
+    if (!check_fprintf_result(ret))
+        return -EIO;
+
+    // Log to syslog if enabled (security events use LOG_WARNING)
+    if (enable_syslog) {
+        syslog(LOG_WARNING, "security_persistence: pid=%u uid=%u comm=%s path=%s type=%s",
+               event->pid, event->uid, event->comm, event->path,
+               persistence_names[event->persistence_type]);
     }
 
     return 0;

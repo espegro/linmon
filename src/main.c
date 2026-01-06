@@ -414,7 +414,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     case EVENT_SECURITY_EXECVEAT:
     case EVENT_SECURITY_BPF:
     case EVENT_SECURITY_CRED_READ:
-    case EVENT_SECURITY_LDPRELOAD: {
+    case EVENT_SECURITY_LDPRELOAD:
+    case EVENT_SECURITY_SUID: {
         // Check respective config flags
         if (type == EVENT_SECURITY_PTRACE && !global_config.monitor_ptrace)
             return 0;
@@ -434,6 +435,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             return 0;
         if (type == EVENT_SECURITY_LDPRELOAD && !global_config.monitor_ldpreload)
             return 0;
+        if (type == EVENT_SECURITY_SUID && !global_config.monitor_suid)
+            return 0;
 
         if (data_sz < sizeof(struct security_event)) {
             fprintf(stderr, "Invalid security event size: %zu\n", data_sz);
@@ -446,6 +449,24 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             return 0;
 
         logger_log_security_event(e);
+        break;
+    }
+
+    case EVENT_SECURITY_PERSISTENCE: {
+        if (!global_config.monitor_persistence)
+            return 0;
+
+        if (data_sz < sizeof(struct persistence_event)) {
+            fprintf(stderr, "Invalid persistence event size: %zu\n", data_sz);
+            return 0;
+        }
+        struct persistence_event *e = data;
+
+        // Apply process filtering
+        if (!filter_should_log_process(e->comm))
+            return 0;
+
+        logger_log_persistence_event(e);
         break;
     }
 

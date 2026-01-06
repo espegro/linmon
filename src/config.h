@@ -70,6 +70,8 @@ struct linmon_config {
     bool monitor_bpf;         // T1014 - eBPF rootkit / packet manipulation
     bool monitor_cred_read;   // T1003.008 - Credential file read (/etc/shadow)
     bool monitor_ldpreload;   // T1574.006 - LD_PRELOAD hijacking
+    bool monitor_persistence; // T1053, T1547 - Persistence mechanisms (cron, systemd, shell profiles)
+    bool monitor_suid;        // T1548.001 - SUID/SGID manipulation (chmod +s)
 };
 
 // Load configuration from file

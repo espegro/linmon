@@ -7,6 +7,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-01-06
+
+### Added
+
+#### User SSH Keys Detection (T1552.004, T1098.004)
+- Extended credential monitoring to detect ~/.ssh/* access
+  - Private key reads: ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa
+  - Authorized keys backdoor: ~/.ssh/authorized_keys (write access)
+  - SSH config hijacking: ~/.ssh/config (ProxyCommand abuse)
+- Uses existing `monitor_cred_read = true` flag (no new config needed)
+- Extends `EVENT_SECURITY_CRED_READ` with new cred_file types:
+  - ssh_private_key (type 6)
+  - ssh_authorized_keys (type 7)
+  - ssh_user_config (type 8)
+- Critical for bastion/jump host security
+
+#### SUID/SGID Manipulation Detection (T1548.001)
+- New event type: `EVENT_SECURITY_SUID` (25)
+- Detects chmod operations that set SUID (04000) or SGID (02000) bits
+- Monitors fchmodat syscall for privilege escalation setup
+- Config flag: `monitor_suid = false` (opt-in)
+- Event fields:
+  - path: File being modified
+  - mode: Full mode bits
+  - suid: Boolean (true if SUID bit set)
+  - sgid: Boolean (true if SGID bit set)
+- Use case: Detect attackers creating SUID binaries for persistent root access
+
+#### Persistence Mechanism Detection (T1053, T1547)
+- New event type: `EVENT_SECURITY_PERSISTENCE` (24)
+- Dedicated detection for persistence locations (separate from general file monitoring)
+- Config flag: `monitor_persistence = false` (opt-in)
+- Detects writes to:
+  - **Cron** (type 1): /etc/cron.d/*, /var/spool/cron/*
+  - **Systemd** (type 2): /etc/systemd/system/*, /usr/lib/systemd/system/*
+  - **Shell profiles** (type 3): ~/.bashrc, ~/.profile, ~/.bash_profile, ~/.zshrc
+  - **Init scripts** (type 4): /etc/rc.local, /etc/init.d/*
+  - **Autostart** (type 5): ~/.config/autostart/*
+- Event fields:
+  - path: File being written
+  - persistence_type: cron, systemd, shell_profile, init, autostart
+  - open_flags: File open flags
+- Low noise: Only logs specific persistence paths (not all file activity)
+
+### Technical Details
+
+**eBPF Implementation:**
+- SSH key detection: Extended `get_cred_file_type()` with /.ssh/ substring scanning
+- SUID detection: Monitors fchmodat syscall, filters on mode & 06000 (S_ISUID | S_ISGID)
+- Persistence detection: `get_persistence_type()` with character-by-character path matching
+  - Prefix matching for /etc/*, /var/*, /usr/* paths
+  - Substring scanning for shell profiles (handles varying home directories)
+  - #pragma unroll loop for BPF verifier compatibility
+
+**Userspace:**
+- Added `logger_log_persistence_event()` with persistence_type name mapping
+- Extended security_event logger with SUID mode bit decoding
+- Config validation and default values (both persistence and SUID default to false)
+
+**Documentation:**
+- linmon.conf.example: Detailed descriptions with use cases and recommendations
+- All three features documented with MITRE ATT&CK technique IDs
+
+### Security Impact
+
+**Overall Coverage:**
+- Extends MITRE ATT&CK coverage from ~87% to ~92% of post-exploitation techniques
+- Addresses key gaps in persistence and privilege escalation detection
+- Complements existing credential monitoring with SSH-specific detection
+
+**Detection Scenarios:**
+1. **SSH Key Theft**: Attacker reads ~/.ssh/id_rsa for lateral movement
+2. **SSH Backdoor**: Attacker writes ~/.ssh/authorized_keys for persistent access
+3. **Cron Persistence**: Attacker creates /etc/cron.d/backdoor for scheduled execution
+4. **Systemd Persistence**: Attacker installs malicious systemd service
+5. **Shell Profile Persistence**: Attacker modifies ~/.bashrc for auto-execution on login
+6. **SUID Escalation**: Attacker runs `chmod +s /tmp/backdoor` for persistent root
+
+### Example Events
+
+**SSH Private Key Read:**
+```json
+{
+  "type": "security_cred_read",
+  "cred_file": "ssh_private_key",
+  "path": "/home/alice/.ssh/id_rsa",
+  "uid": 1001,
+  "username": "attacker",
+  "comm": "cat"
+}
+```
+
+**Cron Persistence:**
+```json
+{
+  "type": "security_persistence",
+  "persistence_type": "cron",
+  "path": "/etc/cron.d/backdoor",
+  "uid": 0,
+  "username": "root",
+  "comm": "echo",
+  "open_flags": 577
+}
+```
+
+**SUID Manipulation:**
+```json
+{
+  "type": "security_suid",
+  "path": "/tmp/exploit",
+  "mode": 35309,
+  "suid": true,
+  "sgid": false,
+  "uid": 0,
+  "username": "root",
+  "comm": "chmod"
+}
+```
+
 ## [1.3.3] - 2026-01-06
 
 ### Added
@@ -508,7 +627,20 @@ Now you can see that curl (PID 12346) was started by bash (PPID 12345) in sessio
 - Systemd service integration
 - SIGHUP config reload support
 
-[Unreleased]: https://github.com/espegro/linmon/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/espegro/linmon/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/espegro/linmon/compare/v1.3.3...v1.4.0
+[1.3.3]: https://github.com/espegro/linmon/compare/v1.3.2...v1.3.3
+[1.3.2]: https://github.com/espegro/linmon/compare/v1.3.1...v1.3.2
+[1.3.1]: https://github.com/espegro/linmon/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/espegro/linmon/compare/v1.2.7...v1.3.0
+[1.2.7]: https://github.com/espegro/linmon/compare/v1.2.6...v1.2.7
+[1.2.6]: https://github.com/espegro/linmon/compare/v1.2.5...v1.2.6
+[1.2.5]: https://github.com/espegro/linmon/compare/v1.2.4...v1.2.5
+[1.2.4]: https://github.com/espegro/linmon/compare/v1.2.3...v1.2.4
+[1.2.3]: https://github.com/espegro/linmon/compare/v1.2.2...v1.2.3
+[1.2.2]: https://github.com/espegro/linmon/compare/v1.1.2...v1.2.2
+[1.1.2]: https://github.com/espegro/linmon/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/espegro/linmon/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/espegro/linmon/compare/v1.0.17...v1.1.0
 [1.0.17]: https://github.com/espegro/linmon/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/espegro/linmon/compare/v1.0.15...v1.0.16

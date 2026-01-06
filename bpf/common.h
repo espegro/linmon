@@ -75,6 +75,8 @@ enum event_type {
     EVENT_SECURITY_BPF = 20,      // T1014 - eBPF rootkit / packet manipulation
     EVENT_SECURITY_CRED_READ = 21,   // T1003.008 - Credential file read (/etc/shadow)
     EVENT_SECURITY_LDPRELOAD = 22,   // T1574.006 - LD_PRELOAD hijacking
+    EVENT_SECURITY_PERSISTENCE = 24, // T1053, T1547 - Persistence mechanisms (cron, systemd, shell profiles)
+    EVENT_SECURITY_SUID = 25,     // T1548.001 - SUID/SGID manipulation (chmod +s)
 };
 
 // Process information stored in map
@@ -171,6 +173,22 @@ struct security_event {
     __u32 extra;                      // For bpf: cmd; for execveat: AT_* flags
     char comm[TASK_COMM_LEN];
     char filename[MAX_FILENAME_LEN];  // Module name, memfd name, or execveat path
+};
+
+// Persistence mechanism detection event (T1053, T1547)
+struct persistence_event {
+    __u32 type;
+    __u64 timestamp;
+    __u32 pid;
+    __u32 ppid;
+    __u32 uid;
+    __u32 sid;
+    __u32 pgid;
+    char tty[16];
+    char comm[TASK_COMM_LEN];
+    char path[MAX_FILENAME_LEN];
+    __u32 flags;                      // open() flags
+    __u8 persistence_type;            // 1=cron, 2=systemd, 3=shell_profile, 4=init, 5=autostart
 };
 
 #endif /* __LINMON_COMMON_H */
