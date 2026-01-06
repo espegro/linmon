@@ -101,8 +101,49 @@ install: $(BUILD_DIR)/$(DAEMON)
 	install -D -m 755 $(BUILD_DIR)/$(DAEMON) /usr/local/sbin/$(DAEMON)
 	install -D -m 644 $(DAEMON).service /etc/systemd/system/$(DAEMON).service
 	mkdir -p /etc/linmon
-	if [ ! -f /etc/linmon/linmon.conf ]; then \
+	# Always install .example as reference (for comparing new options)
+	install -D -m 644 linmon.conf.example /etc/linmon/linmon.conf.example
+	# Only install actual config on first install (never overwrite user config)
+	@if [ ! -f /etc/linmon/linmon.conf ]; then \
+		echo "Installing default configuration to /etc/linmon/linmon.conf"; \
 		install -D -m 600 linmon.conf /etc/linmon/linmon.conf; \
+	else \
+		echo "Existing configuration found at /etc/linmon/linmon.conf (preserving)"; \
+		echo ""; \
+		echo "Checking for new configuration options in v$(VERSION)..."; \
+		MISSING_CRED_WRITE=$$(grep -q "^monitor_cred_write =" /etc/linmon/linmon.conf 2>/dev/null && echo "no" || echo "yes"); \
+		MISSING_LOG_TAMPER=$$(grep -q "^monitor_log_tamper =" /etc/linmon/linmon.conf 2>/dev/null && echo "no" || echo "yes"); \
+		if [ "$$MISSING_CRED_WRITE" = "yes" ] || [ "$$MISSING_LOG_TAMPER" = "yes" ]; then \
+			echo ""; \
+			echo "⚠️  NEW in v1.4.1 - Critical security options missing from your config:"; \
+			if [ "$$MISSING_CRED_WRITE" = "yes" ]; then \
+				echo "  ✗ monitor_cred_write  (T1098.001 - Account manipulation detection)"; \
+			fi; \
+			if [ "$$MISSING_LOG_TAMPER" = "yes" ]; then \
+				echo "  ✗ monitor_log_tamper  (T1070.001 - Log tampering detection)"; \
+			fi; \
+			echo ""; \
+			echo "These features are ENABLED BY DEFAULT but not in your config."; \
+			echo "Add to /etc/linmon/linmon.conf:"; \
+			echo ""; \
+			grep -E '^(monitor_cred_write|monitor_log_tamper) ' /etc/linmon/linmon.conf.example; \
+			echo ""; \
+			echo "Then reload: systemctl reload linmond"; \
+		else \
+			echo "✓ Configuration includes all v$(VERSION) options"; \
+		fi; \
+		echo ""; \
+		echo "Full reference config: /etc/linmon/linmon.conf.example"; \
+		TOTAL_MISSING=$$(grep -E '^[a-z_]+ =' /etc/linmon/linmon.conf.example | cut -d= -f1 | while read opt; do \
+			if ! grep -q "^$$opt =" /etc/linmon/linmon.conf 2>/dev/null; then \
+				echo "$$opt"; \
+			fi; \
+		done | wc -l); \
+		if [ $$TOTAL_MISSING -gt 2 ]; then \
+			echo "Note: $$TOTAL_MISSING total options missing (not all are new)"; \
+			echo "      Compare: diff /etc/linmon/linmon.conf /etc/linmon/linmon.conf.example"; \
+		fi; \
+		echo ""; \
 	fi
 	mkdir -p /var/log/linmon
 	mkdir -p /var/cache/linmon
@@ -116,6 +157,8 @@ install: $(BUILD_DIR)/$(DAEMON)
 	chmod 0644 /etc/logrotate.d/$(DAEMON)
 	chmod 0750 /var/log/linmon /var/cache/linmon
 	systemctl daemon-reload
+	@echo ""
+	@echo "Installation complete. Use 'systemctl start linmond' to start the service."
 
 uninstall:
 	systemctl stop $(DAEMON) || true

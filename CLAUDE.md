@@ -174,6 +174,40 @@ sudo make uninstall
 - `src/*.skel.h` - Generated BPF skeletons (gitignored)
 - `build/linmond` - Final daemon binary
 
+### Configuration Upgrade Behavior
+
+When running `sudo make install` on an **existing installation**, the Makefile preserves user configuration while providing upgrade guidance:
+
+**First installation** (no `/etc/linmon/linmon.conf`):
+- Installs `linmon.conf` as default configuration
+- Installs `linmon.conf.example` as reference
+
+**Upgrade** (existing `/etc/linmon/linmon.conf`):
+- **Never overwrites** existing `linmon.conf` (user changes preserved)
+- **Always installs** updated `linmon.conf.example` for reference
+- **Checks for new options** in current version and displays:
+  ```
+  ⚠️  NEW in v1.4.1 - Critical security options missing from your config:
+    ✗ monitor_cred_write  (T1098.001 - Account manipulation detection)
+    ✗ monitor_log_tamper  (T1070.001 - Log tampering detection)
+
+  These features are ENABLED BY DEFAULT but not in your config.
+  Add to /etc/linmon/linmon.conf:
+
+  monitor_cred_write = true
+  monitor_log_tamper = true
+
+  Then reload: systemctl reload linmond
+  ```
+- Shows total number of missing options (to help with config hygiene)
+- Provides diff command for detailed comparison
+
+**Rationale**: This approach follows Linux package manager best practices (similar to dpkg/rpm):
+- User configuration is sacrosanct (never overwritten)
+- Reference config always available at `/etc/linmon/linmon.conf.example`
+- Clear upgrade path for new features
+- No manual merge conflicts to resolve
+
 ## Development Workflow
 
 ### Generating vmlinux.h
