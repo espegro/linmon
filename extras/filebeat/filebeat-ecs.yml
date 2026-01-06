@@ -242,7 +242,11 @@ processors:
             "security_bind": { id: "T1571", name: "Non-Standard Port" },
             "security_unshare": { id: "T1611", name: "Escape to Host" },
             "security_bpf": { id: "T1014", name: "Rootkit" },
-            "security_cred_read": { id: "T1003.008", name: "OS Credential Dumping: /etc/passwd and /etc/shadow" },
+            "security_cred_read": { id: ["T1003.008", "T1552.004"], name: "Credential Dumping / Private Keys" },
+            "security_cred_write": { id: ["T1098.001", "T1098.004"], name: "Account Manipulation / SSH Authorized Keys" },
+            "security_log_tamper": { id: "T1070.001", name: "Indicator Removal: Clear Linux Logs" },
+            "security_persistence": { id: ["T1053", "T1547"], name: "Scheduled Task/Job / Boot or Logon Autostart" },
+            "security_suid": { id: "T1548.001", name: "Setuid and Setgid" },
             "security_ldpreload": { id: "T1574.006", name: "Dynamic Linker Hijacking" }
           };
 
@@ -263,6 +267,13 @@ processors:
               "T1611": "Privilege Escalation",
               "T1014": "Defense Evasion",
               "T1003.008": "Credential Access",
+              "T1552.004": "Credential Access",
+              "T1098.001": "Persistence",
+              "T1098.004": "Persistence",
+              "T1070.001": "Defense Evasion",
+              "T1053": "Persistence",
+              "T1547": "Persistence",
+              "T1548.001": "Privilege Escalation",
               "T1574.006": "Persistence"
             };
             return tactic_map[technique_id] || "Unknown";
@@ -312,6 +323,13 @@ processors:
         - {from: "protocol", to: "linmon.protocol"}
         - {from: "path", to: "linmon.path"}
         - {from: "inode", to: "linmon.inode"}
+        # v1.4.0/v1.4.1 fields
+        - {from: "cred_file", to: "linmon.cred_file"}
+        - {from: "persistence_type", to: "linmon.persistence_type"}
+        - {from: "tamper_type", to: "linmon.tamper_type"}
+        - {from: "suid", to: "linmon.suid"}
+        - {from: "sgid", to: "linmon.sgid"}
+        - {from: "mode", to: "linmon.mode"}
       ignore_missing: true
       fail_on_error: false
 

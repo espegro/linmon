@@ -83,7 +83,15 @@ if !exists(.hostname) {
 } else if .type == "security_bpf" {
   "T1014"
 } else if .type == "security_cred_read" {
-  "T1003.008"
+  "T1003.008,T1552.004"  # Credential dumping + SSH private keys
+} else if .type == "security_cred_write" {
+  "T1098.001,T1098.004"  # Account manipulation + SSH authorized keys
+} else if .type == "security_log_tamper" {
+  "T1070.001"            # Log clearing
+} else if .type == "security_persistence" {
+  "T1053,T1547"          # Scheduled tasks + Boot/logon autostart
+} else if .type == "security_suid" {
+  "T1548.001"            # SUID/SGID manipulation
 } else if .type == "security_ldpreload" {
   "T1574.006"
 } else {

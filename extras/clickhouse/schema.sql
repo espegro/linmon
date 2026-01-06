@@ -80,7 +80,14 @@ CREATE TABLE IF NOT EXISTS linmon.events
     bpf_cmd Nullable(UInt32),
     cred_file LowCardinality(Nullable(String)),
     open_flags Nullable(UInt32),
-    path Nullable(String)
+    path Nullable(String),
+
+    -- v1.4.0/v1.4.1 additions
+    persistence_type LowCardinality(Nullable(String)),  -- cron, systemd, shell_profile, init, autostart
+    tamper_type LowCardinality(Nullable(String)),       -- truncate, delete
+    suid Nullable(UInt8),                                -- SUID bit set
+    sgid Nullable(UInt8),                                -- SGID bit set
+    mode Nullable(UInt32)                                -- Full file mode for SUID events
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
@@ -225,7 +232,7 @@ WHERE event_category = 'security';
 --   AND timestamp > now() - INTERVAL 1 DAY
 -- ORDER BY timestamp DESC;
 
--- Detect credential file access (T1003.008)
+-- Detect credential file READ access (T1003.008, T1552.004)
 -- SELECT
 --     timestamp,
 --     hostname,
@@ -236,6 +243,61 @@ WHERE event_category = 'security';
 --     open_flags
 -- FROM linmon.events
 -- WHERE type = 'security_cred_read'
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect credential file WRITE access (T1098.001, T1098.004)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     username,
+--     cred_file,
+--     path,
+--     open_flags
+-- FROM linmon.events
+-- WHERE type = 'security_cred_write'
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect log tampering (T1070.001)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     username,
+--     tamper_type,
+--     path
+-- FROM linmon.events
+-- WHERE type = 'security_log_tamper'
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect persistence mechanisms (T1053, T1547)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     username,
+--     persistence_type,
+--     path
+-- FROM linmon.events
+-- WHERE type = 'security_persistence'
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect SUID/SGID manipulation (T1548.001)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     username,
+--     path,
+--     suid,
+--     sgid,
+--     mode
+-- FROM linmon.events
+-- WHERE type = 'security_suid'
 -- ORDER BY timestamp DESC
 -- LIMIT 100;
 
