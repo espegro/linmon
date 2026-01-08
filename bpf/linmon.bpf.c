@@ -2638,3 +2638,143 @@ int handle_persistence_openat_kp(struct pt_regs *ctx)
 
     return handle_persistence_openat(dfd, pathname, flags);
 }
+
+// ============================================================================
+// RAW DISK ACCESS DETECTION (T1561.001/002 - Disk Wipe)
+// ============================================================================
+
+// Check if path is a raw block device
+// Returns true for whole disks, partitions, RAID, LVM, etc.
+static __always_inline int is_raw_block_device(const char *path)
+{
+    // Check for /dev/ prefix (5 chars minimum: /dev/X)
+    if (path[0] != '/' || path[1] != 'd' || path[2] != 'e' ||
+        path[3] != 'v' || path[4] != '/' || path[5] == '\0') {
+        return 0;
+    }
+
+    // After /dev/ (index 5)
+    char c5 = path[5];
+    char c6 = path[6];
+    char c7 = path[7];
+
+    // SCSI/SATA disks: /dev/sd[a-z] (whole disk or partitions)
+    if (c5 == 's' && c6 == 'd' && c7 >= 'a' && c7 <= 'z') {
+        return 1;
+    }
+
+    // NVMe disks: /dev/nvme[0-9]n[0-9] (whole disk or partitions)
+    if (c5 == 'n' && c6 == 'v' && c7 == 'm' && path[8] == 'e' &&
+        path[9] >= '0' && path[9] <= '9') {
+        return 1;
+    }
+
+    // Virtio block devices: /dev/vd[a-z]
+    if (c5 == 'v' && c6 == 'd' && c7 >= 'a' && c7 <= 'z') {
+        return 1;
+    }
+
+    // Xen virtual block devices: /dev/xvd[a-z]
+    if (c5 == 'x' && c6 == 'v' && c7 == 'd' && path[8] >= 'a' && path[8] <= 'z') {
+        return 1;
+    }
+
+    // MMC/SD cards: /dev/mmcblk[0-9]
+    if (c5 == 'm' && c6 == 'm' && c7 == 'c' && path[8] == 'b' &&
+        path[9] == 'l' && path[10] == 'k' && path[11] >= '0' && path[11] <= '9') {
+        return 1;
+    }
+
+    // Software RAID: /dev/md[0-9]
+    if (c5 == 'm' && c6 == 'd' && c7 >= '0' && c7 <= '9') {
+        return 1;
+    }
+
+    // Device mapper (LVM, LUKS): /dev/dm-[0-9]
+    if (c5 == 'd' && c6 == 'm' && c7 == '-' && path[8] >= '0' && path[8] <= '9') {
+        return 1;
+    }
+
+    // Loop devices: /dev/loop[0-9]
+    if (c5 == 'l' && c6 == 'o' && c7 == 'o' && path[8] == 'p' &&
+        path[9] >= '0' && path[9] <= '9') {
+        return 1;
+    }
+
+    return 0;  // Not a raw block device
+}
+
+// Handler for raw disk access detection
+static __always_inline int handle_raw_disk_openat(int dfd, const char *pathname, int flags)
+{
+    char path[MAX_FILENAME_LEN];
+    __u32 uid;
+
+    if (!pathname)
+        return 0;
+
+    // Read path from userspace
+    if (bpf_probe_read_user_str(path, sizeof(path), pathname) < 0)
+        return 0;
+
+    // Check if this is a raw block device
+    if (!is_raw_block_device(path))
+        return 0;
+
+    // Only interested in WRITE operations (T1561 - Disk Wipe)
+    // O_WRONLY or O_RDWR indicate write intent
+    if (!(flags & (O_WRONLY | O_RDWR)))
+        return 0;
+
+    uid = bpf_get_current_uid_gid();
+
+    // Rate limiting check
+    if (should_rate_limit(uid))
+        return 0;
+
+    // Reserve event
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+
+    // Fill event
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    event->type = EVENT_RAW_DISK_ACCESS;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    bpf_get_current_comm(&event->comm, sizeof(event->comm));
+    __builtin_memcpy(event->filename, path, sizeof(event->filename));
+    event->flags = flags;
+    event->target_pid = 0;
+    event->port = 0;
+    event->family = 0;
+    event->extra = 0;
+
+    // Fill process context (ppid, sid, pgid, tty)
+    FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
+
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_openat")
+int handle_raw_disk_openat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int dfd = (int)ctx->args[0];
+    const char *pathname = (const char *)ctx->args[1];
+    int flags = (int)ctx->args[2];
+
+    return handle_raw_disk_openat(dfd, pathname, flags);
+}
+
+SEC("kprobe/__x64_sys_openat")
+int handle_raw_disk_openat_kp(struct pt_regs *ctx)
+{
+    int dfd = (int)PT_REGS_PARM1(ctx);
+    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
+    int flags = (int)PT_REGS_PARM3(ctx);
+
+    return handle_raw_disk_openat(dfd, pathname, flags);
+}

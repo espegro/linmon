@@ -88,6 +88,7 @@ enum event_type {
     EVENT_SECURITY_SUID = 25,     // T1548.001 - SUID/SGID manipulation (chmod +s)
     EVENT_SECURITY_CRED_WRITE = 26,  // T1098.001 - Account manipulation (/etc/passwd, shadow, sudoers writes)
     EVENT_SECURITY_LOG_TAMPER = 27,  // T1070.001 - Log file tampering (/var/log/* deletion/truncate)
+    EVENT_RAW_DISK_ACCESS = 28,      // T1561.001/002 - Disk Wipe (raw block device write access)
 };
 
 // Process information stored in map

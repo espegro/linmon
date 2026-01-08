@@ -76,6 +76,7 @@ struct linmon_config {
     bool monitor_suid;        // T1548.001 - SUID/SGID manipulation (chmod +s)
     bool monitor_cred_write;  // T1098.001 - Account manipulation (credential file writes)
     bool monitor_log_tamper;  // T1070.001 - Log tampering (deletion/truncation)
+    bool monitor_raw_disk_access;  // T1561.001/002 - Disk wipe (raw block device write)
 };
 
 // Load configuration from file

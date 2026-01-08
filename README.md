@@ -422,6 +422,7 @@ jq 'select(.sid == 1000)' /var/log/linmon/events.json
 - `security_unshare` - T1611 Container Escape
 - `security_execveat` - T1620 Fileless Execution
 - `security_bpf` - T1014 eBPF Rootkit
+- `raw_disk_access` - T1561.001/002 Disk Wipe (raw block device write access)
 
 **Daemon Lifecycle (Tamper Detection):**
 - `daemon_start` - LinMon monitoring started

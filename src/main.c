@@ -444,6 +444,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
             return 0;
         if (type == EVENT_SECURITY_LOG_TAMPER && !global_config.monitor_log_tamper)
             return 0;
+        if (type == EVENT_RAW_DISK_ACCESS && !global_config.monitor_raw_disk_access)
+            return 0;
 
         if (data_sz < sizeof(struct security_event)) {
             fprintf(stderr, "Invalid security event size: %zu\n", data_sz);

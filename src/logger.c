@@ -1066,6 +1066,9 @@ int logger_log_security_event(const struct security_event *event)
     case EVENT_SECURITY_LOG_TAMPER:
         event_type = "security_log_tamper";
         break;
+    case EVENT_RAW_DISK_ACCESS:
+        event_type = "raw_disk_access";
+        break;
     default:
         event_type = "security_unknown";
     }
@@ -1222,6 +1225,17 @@ int logger_log_security_event(const struct security_event *event)
         if (event->extra == 1) {
             fprintf(log_fp, ",\"open_flags\":%u", event->flags);
         }
+    } else if (event->type == EVENT_RAW_DISK_ACCESS) {
+        // Raw disk write access (T1561 - Disk Wipe)
+        if (event->filename[0]) {
+            json_escape(event->filename, filename_escaped, sizeof(filename_escaped));
+            fprintf(log_fp, ",\"device\":\"%s\"", filename_escaped);
+        }
+        fprintf(log_fp, ",\"open_flags\":%u", event->flags);
+        // Indicate write intent
+        bool wronly = (event->flags & O_WRONLY) != 0;
+        bool rdwr = (event->flags & O_RDWR) != 0;
+        fprintf(log_fp, ",\"write_access\":%s", (wronly || rdwr) ? "true" : "false");
     }
 
     // Log container info (sparse - only if in container)

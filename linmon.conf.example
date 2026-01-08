@@ -433,3 +433,15 @@ monitor_cred_write = true
 # Recommendation: Enable by default (true) - critical detection with minimal noise
 # Event fields: tamper_type (truncate/delete), path, open_flags (for truncate)
 monitor_log_tamper = true
+
+# Monitor raw disk access - T1561.001/002 Disk Wipe detection
+# Logs: raw_disk_access events
+# Detects: Write access to raw block devices (dd, shred, wipefs, ransomware disk wipers)
+# Monitored devices: /dev/sd*, /dev/nvme*, /dev/vd*, /dev/xvd*, /dev/md*, /dev/dm-*, /dev/loop*
+# Use case: Detect destructive attacks that wipe disks (ransomware final stage, sabotage, anti-forensics)
+# Examples: dd if=/dev/zero of=/dev/sda, shred /dev/nvme0n1, ransomware wiping MBR/GPT
+# Warning: Low noise - normal applications rarely write directly to raw devices
+# Note: Legitimate use cases exist (disk imaging tools, system installers, disk encryption setup)
+# Recommendation: Enable by default (true) - critical detection, review alerts carefully
+# Event fields: device (e.g., /dev/sda), open_flags, write_access (boolean)
+monitor_raw_disk_access = true
