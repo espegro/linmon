@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Example Configurations for Common Use Cases
+- **Five pre-configured examples** in `examples/configs/` directory
+- `desktop.conf`: Personal laptop/desktop (50-200 events/day, <1% CPU)
+  - Monitors only logged-in user (UID >= 1000)
+  - Filters browser/IDE thread noise
+  - Selective security detections (excludes debuggers)
+- `bastion.conf`: SSH bastion/jump server (200-1000 events/day, 1-3% CPU)
+  - Monitors ALL users including root
+  - Comprehensive credential theft detection
+  - Extended log retention (30 days)
+- `server.conf`: Web/app/database server (200-500 events/day, 0.5-2% CPU)
+  - Balanced security with low noise
+  - Thread filtering for multi-threaded apps
+  - Optimized for production workloads
+- `container-host.conf`: Docker/Kubernetes host (500-2000 events/day, 2-5% CPU)
+  - Container metadata capture enabled
+  - vsock and namespace manipulation monitoring
+  - Kubernetes pod-level correlation support
+- `paranoid.conf`: Maximum security/forensics (5000-50000+ events/day, 5-20% CPU)
+  - ALL monitoring enabled (processes, files, network, UDP)
+  - NO filtering (maximum visibility)
+  - For incident response and high-security environments
+- **Comprehensive README** in `examples/configs/README.md` with selection guide and tuning tips
+
 #### Container Awareness and Metadata Enrichment
 - **Container runtime detection** from namespace inodes and cgroup parsing
 - Automatic detection of: Docker, Podman, Kubernetes, containerd, LXC, systemd-nspawn

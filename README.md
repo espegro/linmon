@@ -146,6 +146,29 @@ See **[INSTALL.md](INSTALL.md)** for complete dependency lists for Ubuntu and RH
 
 ## Configuration
 
+### Quick Start with Example Configurations
+
+LinMon provides pre-configured examples for common use cases. Choose the one that matches your environment:
+
+| Configuration | Use Case | Event Volume | CPU Overhead |
+|--------------|----------|--------------|--------------|
+| `desktop.conf` | Personal laptop/desktop | 50-200/day | <1% |
+| `bastion.conf` | SSH bastion/jump server | 200-1000/day | 1-3% |
+| `server.conf` | Web/app/database server | 200-500/day | 0.5-2% |
+| `container-host.conf` | Docker/Kubernetes host | 500-2000/day | 2-5% |
+| `paranoid.conf` | Maximum security/forensics | 5000-50000+/day | 5-20% |
+
+**Installation:**
+```bash
+sudo mkdir -p /etc/linmon
+sudo cp examples/configs/server.conf /etc/linmon/linmon.conf
+sudo systemctl reload linmond
+```
+
+See **[examples/configs/README.md](examples/configs/README.md)** for detailed descriptions and tuning guidance.
+
+### Manual Configuration
+
 Create `/etc/linmon/linmon.conf` from the example:
 
 ```bash
