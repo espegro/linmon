@@ -20,12 +20,14 @@
 #include "filehash.h"
 #include "pkgcache.h"
 #include "procfs.h"
+#include "containerinfo.h"
 
 static FILE *log_fp = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static bool enable_resolve_usernames = false;
 static bool enable_hash_binaries = false;
 static bool enable_verify_packages = false;
+static bool enable_container_metadata = false;  // Resolve container IDs from cgroups
 static bool enable_syslog = false;  // Log all events to syslog (in addition to JSON)
 static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
@@ -68,11 +70,12 @@ int logger_init(const char *log_file)
 }
 
 void logger_set_enrichment(bool resolve_usernames, bool hash_binaries,
-                           bool verify_packages)
+                           bool verify_packages, bool container_metadata)
 {
     enable_resolve_usernames = resolve_usernames;
     enable_hash_binaries = hash_binaries;
     enable_verify_packages = verify_packages;
+    enable_container_metadata = container_metadata;
 }
 
 void logger_set_rotation(const char *log_file, bool enabled,
@@ -376,6 +379,85 @@ static void format_timestamp(char *buf, size_t size)
     }
 }
 
+// Log container information (sparse field - only if in container)
+// Must be called with log_mutex held
+static void log_container_info(pid_t pid, uint32_t pid_ns, uint32_t mnt_ns, uint32_t net_ns)
+{
+    int ret;
+
+    if (!enable_container_metadata)
+        return;
+
+    // Check if process is in container (namespace differs from init)
+    if (!containerinfo_is_in_container(pid_ns, mnt_ns, net_ns))
+        return;  // Host process - no container field
+
+    // Get container metadata from cgroups
+    struct container_info info;
+    if (!containerinfo_get(pid, &info))
+        return;  // Could not get container info (process may have exited)
+
+    // Log container field (sparse - only if in container)
+    ret = fprintf(log_fp, ",\"container\":{");
+    if (!check_fprintf_result(ret))
+        return;  // Write failed, abort
+
+    // Container runtime
+    const char *runtime_str = "unknown";
+    switch (info.runtime) {
+    case RUNTIME_DOCKER:
+        runtime_str = "docker";
+        break;
+    case RUNTIME_PODMAN:
+        runtime_str = "podman";
+        break;
+    case RUNTIME_CONTAINERD:
+        runtime_str = "containerd";
+        break;
+    case RUNTIME_LXC:
+        runtime_str = "lxc";
+        break;
+    case RUNTIME_SYSTEMD_NSPAWN:
+        runtime_str = "systemd-nspawn";
+        break;
+    case RUNTIME_KUBERNETES:
+        runtime_str = "kubernetes";
+        break;
+    default:
+        runtime_str = "unknown";
+    }
+
+    ret = fprintf(log_fp, "\"runtime\":\"%s\"", runtime_str);
+    if (!check_fprintf_result(ret))
+        goto close_json;  // Write failed, try to close JSON object
+
+    // Container ID (if available)
+    if (info.id[0]) {
+        char id_escaped[CONTAINER_ID_LEN * 6];
+        json_escape(info.id, id_escaped, sizeof(id_escaped));
+        ret = fprintf(log_fp, ",\"id\":\"%s\"", id_escaped);
+        if (!check_fprintf_result(ret))
+            goto close_json;
+    }
+
+    // Pod ID (for Kubernetes)
+    if (info.pod_id[0]) {
+        char pod_escaped[CONTAINER_ID_LEN * 6];
+        json_escape(info.pod_id, pod_escaped, sizeof(pod_escaped));
+        ret = fprintf(log_fp, ",\"pod_id\":\"%s\"", pod_escaped);
+        if (!check_fprintf_result(ret))
+            goto close_json;
+    }
+
+    // Namespace inodes (for correlation)
+    ret = fprintf(log_fp, ",\"ns_pid\":%u,\"ns_mnt\":%u,\"ns_net\":%u",
+            pid_ns, mnt_ns, net_ns);
+    check_fprintf_result(ret);  // Check but don't abort, we're almost done
+
+close_json:
+    fprintf(log_fp, "}");  // Always try to close JSON object
+}
+
 int logger_log_process_event(const struct process_event *event)
 {
     char timestamp[64];
@@ -533,6 +615,9 @@ int logger_log_process_event(const struct process_event *event)
         fprintf(log_fp, ",\"exit_code\":%d", (int)event->exit_code);
     }
 
+    // Log container info (sparse - only if in container)
+    log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
+
     int ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
@@ -636,7 +721,12 @@ int logger_log_file_event(const struct file_event *event)
     json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
     fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
 
-    int ret = fprintf(log_fp, ",\"flags\":%u}\n", event->flags);
+    fprintf(log_fp, ",\"flags\":%u", event->flags);
+
+    // Log container info (sparse - only if in container)
+    log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
+
+    int ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -768,10 +858,15 @@ int logger_log_network_event(const struct network_event *event)
         fprintf(log_fp, ",\"process_name\":null");
     }
 
-    int ret = fprintf(log_fp, ",\"saddr\":\"%s\","
-            "\"daddr\":\"%s\",\"sport\":%u,\"dport\":%u}\n",
+    fprintf(log_fp, ",\"saddr\":\"%s\","
+            "\"daddr\":\"%s\",\"sport\":%u,\"dport\":%u",
             saddr_str, daddr_str,
             event->sport, event->dport);
+
+    // Log container info (sparse - only if in container)
+    log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
+
+    int ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -892,6 +987,9 @@ int logger_log_privilege_event(const struct privilege_event *event)
         json_escape(event->target_comm, target_escaped, sizeof(target_escaped));
         fprintf(log_fp, ",\"target\":\"%s\"", target_escaped);
     }
+
+    // Log container info (sparse - only if in container)
+    log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
     int ret = fprintf(log_fp, "}\n");
 
@@ -1126,6 +1224,9 @@ int logger_log_security_event(const struct security_event *event)
         }
     }
 
+    // Log container info (sparse - only if in container)
+    log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
+
     int ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
@@ -1205,6 +1306,9 @@ int logger_log_persistence_event(const struct persistence_event *event)
     fprintf(log_fp, ",\"path\":\"%s\"", path_escaped);
     fprintf(log_fp, ",\"persistence_type\":\"%s\"", persistence_names[event->persistence_type]);
     fprintf(log_fp, ",\"open_flags\":%u", event->flags);
+
+    // Log container info (sparse - only if in container)
+    log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
     int ret = fprintf(log_fp, "}\n");
 

@@ -15,7 +15,7 @@ int logger_init(const char *log_file);
 
 // Set enrichment options
 void logger_set_enrichment(bool resolve_usernames, bool hash_binaries,
-                           bool verify_packages);
+                           bool verify_packages, bool container_metadata);
 
 // Configure built-in log rotation
 // log_file: base path for rotation (e.g., "/var/log/linmon/events.json")

@@ -973,7 +973,8 @@ int main(int argc, char **argv)
     // Configure logger enrichment options
     logger_set_enrichment(global_config.resolve_usernames,
                          global_config.hash_binaries,
-                         global_config.verify_packages);
+                         global_config.verify_packages,
+                         global_config.capture_container_metadata);
 
     // Configure syslog output for all events
     logger_set_syslog(global_config.log_to_syslog);
@@ -1341,7 +1342,8 @@ int main(int argc, char **argv)
             // Update logger enrichment options
             logger_set_enrichment(global_config.resolve_usernames,
                                  global_config.hash_binaries,
-                                 global_config.verify_packages);
+                                 global_config.verify_packages,
+                                 global_config.capture_container_metadata);
 
             // Update syslog setting
             logger_set_syslog(global_config.log_to_syslog);

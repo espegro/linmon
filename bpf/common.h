@@ -35,6 +35,14 @@
 // Byte order helpers (for eBPF)
 #define __bpf_ntohs(x) __builtin_bswap16(x)
 
+// Init namespace inode numbers (host/non-container processes)
+// These values are constant across all Linux systems
+#define PROC_PID_INIT_INO  4026531836  // Initial PID namespace
+#define PROC_UTS_INIT_INO  4026531838  // Initial UTS namespace
+#define PROC_IPC_INIT_INO  4026531839  // Initial IPC namespace
+#define PROC_MNT_INIT_INO  4026531840  // Initial mount namespace
+#define PROC_NET_INIT_INO  4026531841  // Initial network namespace
+
 // BPF config shared between kernel and userspace
 struct bpf_config {
     __u32 min_uid;
@@ -108,6 +116,10 @@ struct process_event {
     char filename[MAX_FILENAME_LEN];
     char cmdline[MAX_CMDLINE_LEN];
     __u32 exit_code;
+    // Container/namespace identification
+    __u32 pid_ns;                 // PID namespace inode
+    __u32 mnt_ns;                 // Mount namespace inode
+    __u32 net_ns;                 // Network namespace inode
 };
 
 struct file_event {
@@ -123,6 +135,10 @@ struct file_event {
     char filename[MAX_FILENAME_LEN];
     __u32 flags;
     __u32 mode;
+    // Container/namespace identification
+    __u32 pid_ns;
+    __u32 mnt_ns;
+    __u32 net_ns;
 };
 
 struct network_event {
@@ -141,6 +157,10 @@ struct network_event {
     __u16 dport;
     __u16 family;    // AF_INET, AF_INET6, or AF_VSOCK
     __u8 protocol;   // TCP, UDP (not used for AF_VSOCK)
+    // Container/namespace identification
+    __u32 pid_ns;
+    __u32 mnt_ns;
+    __u32 net_ns;
 };
 
 struct privilege_event {
@@ -157,6 +177,10 @@ struct privilege_event {
     __u32 new_gid;
     char comm[TASK_COMM_LEN];
     char target_comm[TASK_COMM_LEN]; // For sudo: the command being run
+    // Container/namespace identification
+    __u32 pid_ns;
+    __u32 mnt_ns;
+    __u32 net_ns;
 };
 
 // Security monitoring event (MITRE ATT&CK detection)
@@ -176,6 +200,10 @@ struct security_event {
     __u32 extra;                      // For bpf: cmd; for execveat: AT_* flags
     char comm[TASK_COMM_LEN];
     char filename[MAX_FILENAME_LEN];  // Module name, memfd name, or execveat path
+    // Container/namespace identification
+    __u32 pid_ns;
+    __u32 mnt_ns;
+    __u32 net_ns;
 };
 
 // Persistence mechanism detection event (T1053, T1547)
@@ -192,6 +220,10 @@ struct persistence_event {
     char path[MAX_FILENAME_LEN];
     __u32 flags;                      // open() flags
     __u8 persistence_type;            // 1=cron, 2=systemd, 3=shell_profile, 4=init, 5=autostart
+    // Container/namespace identification
+    __u32 pid_ns;
+    __u32 mnt_ns;
+    __u32 net_ns;
 };
 
 #endif /* __LINMON_COMMON_H */

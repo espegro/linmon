@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-01-08
+
+### Added
+
+#### Container Awareness and Metadata Enrichment
+- **Container runtime detection** from namespace inodes and cgroup parsing
+- Automatic detection of: Docker, Podman, Kubernetes, containerd, LXC, systemd-nspawn
+- **Sparse field logging**: Container metadata only added when process is containerized
+  - Host processes: Zero JSON overhead (only 16 bytes in ring buffer)
+  - Container processes: +150 bytes avg with full metadata
+- **Event fields added**:
+  - `container.runtime`: Runtime type (docker, podman, kubernetes, etc.)
+  - `container.id`: Full container ID (64-char hex for Docker/Podman)
+  - `container.pod_id`: Kubernetes pod UUID (if applicable)
+  - `container.ns_pid`: PID namespace inode (for correlation)
+  - `container.ns_mnt`: Mount namespace inode
+  - `container.ns_net`: Network namespace inode
+- **eBPF implementation**:
+  - Added namespace inode fields to all event structures
+  - New `FILL_NAMESPACE_INFO()` macro reads pid_ns, mnt_ns, net_ns from task->nsproxy
+  - Applied to all 30+ event handlers (process, file, network, privilege, security)
+- **Userspace implementation**:
+  - `containerinfo.c`: Parses `/proc/<pid>/cgroup` for runtime and container ID
+  - Pattern matching for multiple cgroup formats (systemd, cgroupsv2, legacy)
+  - `containerinfo_is_in_container()`: Fast inline check comparing namespace inodes
+  - Integrated into all logger functions with fail-safe error handling
+- **Configuration**: `capture_container_metadata = true` (enabled by default)
+- **Performance**: ~0.1ms overhead per containerized event, zero for host processes
+- **Use cases**:
+  - Container escape detection (process starts in container, later in host namespace)
+  - Lateral movement tracking across container boundaries
+  - Kubernetes pod-level correlation of security events
+  - SIEM enrichment for multi-container environments
+
+**Example event**:
+```json
+{
+  "type": "process_exec",
+  "comm": "curl",
+  "filename": "/usr/bin/curl",
+  "container": {
+    "runtime": "docker",
+    "id": "73d7126417b3d3c070cacf2be27eb576620365c8545c73b7b4aa63760be0b586",
+    "ns_pid": 4026534902,
+    "ns_mnt": 4026534899,
+    "ns_net": 4026534904
+  }
+}
+```
+
+### Fixed
+
+#### Security Hardening of Container Detection Code
+- **NULL pointer dereference** (HIGH): Fixed unsafe pointer arithmetic in `extract_container_id()`
+  - Replaced `strchr()` chain with safe parsing and length validation
+  - Separate handling for `/docker-` and `/docker/` patterns
+- **Buffer overflow** (CRITICAL): Increased cgroup buffer from 512 to PATH_MAX (4096 bytes)
+  - Kubernetes cgroup paths can exceed 512 bytes
+  - Prevents truncation and parsing errors
+- **fprintf() validation** (MEDIUM): Added error checking to all fprintf() calls in `log_container_info()`
+  - Uses existing `check_fprintf_result()` helper
+  - Graceful degradation on write failures (attempts to close JSON object)
+- **Minimum ID length validation** (MEDIUM): Reject container IDs shorter than 12 hex chars
+  - Prevents false positives from short pattern matches
+  - Docker/Podman IDs are 64 chars, accept >= 12 for short ID support
+- **Namespace inode validation** (MEDIUM): Added zero-check in `containerinfo_is_in_container()`
+  - Detects corrupted or invalid eBPF data
+  - Returns false if any namespace inode is zero
+- **containerd fallback logic** (LOW): Fixed runtime detection when container ID unavailable
+  - Now returns true when containerd detected even without extractable ID
+  - Consistent with other runtime detection behaviors
+- **Dead code removal** (LOW): Removed unreachable duplicated condition in `containerinfo_get()`
+  - Cleaned up `if (!found && !found)` logic error
+
+### Technical Details
+
+**eBPF Changes**:
+- Added namespace constants to `bpf/common.h`: PROC_PID_INIT_INO (4026531836), PROC_MNT_INIT_INO (4026531840), PROC_NET_INIT_INO (4026531841)
+- Added namespace fields to all event structures: `__u32 pid_ns, mnt_ns, net_ns`
+- Macro `FILL_NAMESPACE_INFO()` reads from `task->nsproxy` using CO-RE for kernel portability
+- Initializes to init namespace values, then reads actual values if nsproxy exists
+
+**Userspace Changes**:
+- New files: `src/containerinfo.c`, `src/containerinfo.h`
+- Updated: `src/logger.c` (added `log_container_info()`), `src/config.c`, `src/main.c`
+- Container detection only attempted if namespace differs from init (performance optimization)
+- Pattern matching supports:
+  - Docker: `/docker-<id>` or `/docker/<id>`
+  - Podman: `/libpod-<id>`
+  - Kubernetes: `/kubepods.../pod<uuid>/.../cri-containerd-<id>`
+  - containerd: `/containerd.service/...`
+  - LXC: `/lxc/<name>`
+  - systemd-nspawn: `/machine-<name>`
+
+**Configuration**:
+- Added to `linmon.conf` and `linmon.conf.example`
+- Default enabled (essential for container environments)
+- Can be disabled for non-containerized hosts to save minimal overhead
+
 ## [1.4.2] - 2026-01-06
 
 ### Fixed

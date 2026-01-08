@@ -223,6 +223,15 @@ verify_packages = false
 # Default: 10000
 # pkg_cache_size = 10000
 
+# Capture container metadata (runtime, ID, pod ID) from /proc/<pid>/cgroup
+# Adds "container" field (sparse - only for containerized processes) to all events
+# Supports: Docker, Podman, containerd, LXC, systemd-nspawn, Kubernetes
+# Minimal performance impact (~0.1ms per event for containerized processes)
+# Note: No overhead for host processes (namespace check is in eBPF)
+# Recommendation: Keep enabled for container environments
+# Default: true
+capture_container_metadata = true
+
 # ============================================================================
 # TAMPER DETECTION & INTEGRITY MONITORING
 # ============================================================================

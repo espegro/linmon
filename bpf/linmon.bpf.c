@@ -279,6 +279,44 @@ static __always_inline void fill_session_info(struct process_event *event,
         } \
     } while (0)
 
+// Generic macro to fill namespace information for container detection
+// Reads PID, mount, and network namespace inodes from task->nsproxy
+#define FILL_NAMESPACE_INFO(event, task) \
+    do { \
+        struct nsproxy *nsproxy; \
+        struct pid_namespace *pid_ns; \
+        struct mnt_namespace *mnt_ns; \
+        struct net *net_ns; \
+        \
+        /* Initialize to init namespace values (host) */ \
+        (event)->pid_ns = PROC_PID_INIT_INO; \
+        (event)->mnt_ns = PROC_MNT_INIT_INO; \
+        (event)->net_ns = PROC_NET_INIT_INO; \
+        \
+        /* Read nsproxy */ \
+        nsproxy = BPF_CORE_READ(task, nsproxy); \
+        if (!nsproxy) \
+            break; \
+        \
+        /* Read PID namespace inode */ \
+        pid_ns = BPF_CORE_READ(nsproxy, pid_ns_for_children); \
+        if (pid_ns) { \
+            (event)->pid_ns = BPF_CORE_READ(pid_ns, ns.inum); \
+        } \
+        \
+        /* Read mount namespace inode */ \
+        mnt_ns = BPF_CORE_READ(nsproxy, mnt_ns); \
+        if (mnt_ns) { \
+            (event)->mnt_ns = BPF_CORE_READ(mnt_ns, ns.inum); \
+        } \
+        \
+        /* Read network namespace inode */ \
+        net_ns = BPF_CORE_READ(nsproxy, net_ns); \
+        if (net_ns) { \
+            (event)->net_ns = BPF_CORE_READ(net_ns, ns.inum); \
+        } \
+    } while (0)
+
 // Helper to read SUDO_UID from process environment
 // Returns the original UID before sudo, or 0 if not running via sudo
 // Only checks processes running as root (uid 0) for performance
@@ -396,6 +434,9 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
     // Fill session info (sid, pgid, tty)
     fill_session_info(event, task);
 
+    // Fill namespace info (pid_ns, mnt_ns, net_ns)
+    FILL_NAMESPACE_INFO(event, task);
+
     // Check for sudo context (only for root processes)
     if (uid == 0) {
         event->sudo_uid = read_sudo_uid(task);
@@ -464,6 +505,9 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 
     // Fill session info (sid, pgid, tty)
     fill_session_info(event, task);
+
+    // Fill namespace info (pid_ns, mnt_ns, net_ns)
+    FILL_NAMESPACE_INFO(event, task);
 
     // sudo_uid not tracked for exit (already logged at exec)
     event->sudo_uid = 0;
@@ -575,6 +619,7 @@ static __always_inline int handle_openat_common(const char *filename, int flags)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     bpf_probe_read_user_str(&event->filename, sizeof(event->filename), filename);
@@ -668,6 +713,7 @@ regular_file_delete:
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     bpf_probe_read_user_str(&event->filename, sizeof(event->filename), filename);
@@ -728,6 +774,7 @@ int BPF_KPROBE(tcp_connect_enter, struct sock *sk)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -814,6 +861,7 @@ int BPF_KPROBE(tcp_v4_connect_enter, struct sock *sk)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -902,6 +950,7 @@ int BPF_KRETPROBE(inet_accept_exit, struct sock *sk)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -992,6 +1041,7 @@ int BPF_KPROBE(udp_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t le
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -1103,6 +1153,7 @@ int BPF_KPROBE(udpv6_sendmsg_enter, struct sock *sk, struct msghdr *msg, size_t 
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -1175,6 +1226,7 @@ int BPF_KPROBE(vsock_connect_enter, struct socket *sock, struct sockaddr *addr, 
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
 
@@ -1256,6 +1308,7 @@ int handle_privilege_exec(struct trace_event_raw_sched_process_exec *ctx)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     __builtin_memcpy(&event->comm, comm, TASK_COMM_LEN);
 
@@ -1300,6 +1353,7 @@ static __always_inline int handle_setuid_common(__u32 new_uid)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->target_comm[0] = '\0';
@@ -1356,6 +1410,7 @@ static __always_inline int handle_setgid_common(__u32 new_gid)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->target_comm[0] = '\0';
@@ -1422,6 +1477,7 @@ static __always_inline int handle_ptrace_common(long request, __u32 target_pid)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = target_pid;
     event->flags = (__u32)request;
     event->port = 0;
@@ -1475,6 +1531,7 @@ int handle_finit_module_tp(struct trace_event_raw_sys_enter *ctx)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = (__u32)ctx->args[2];  // Module flags
     event->port = 0;
@@ -1504,6 +1561,7 @@ int handle_finit_module_kp(struct pt_regs *ctx)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = (__u32)PT_REGS_PARM3(ctx);
     event->port = 0;
@@ -1534,6 +1592,7 @@ int handle_init_module_tp(struct trace_event_raw_sys_enter *ctx)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = 0;  // Legacy syscall doesn't have flags
     event->port = 0;
@@ -1563,6 +1622,7 @@ int handle_init_module_kp(struct pt_regs *ctx)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = 0;
     event->port = 0;
@@ -1602,6 +1662,7 @@ static __always_inline int handle_memfd_common(const char *name, unsigned int fl
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = flags;
     event->port = 0;
@@ -1672,6 +1733,7 @@ static __always_inline int handle_bind_common(int fd, struct sockaddr *addr, int
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = fd;  // Store fd in target_pid field
     event->flags = 0;
     event->family = family;
@@ -1762,6 +1824,7 @@ static __always_inline int handle_unshare_common(unsigned long flags)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = (__u32)flags;
     event->port = 0;
@@ -1820,6 +1883,7 @@ static __always_inline int handle_execveat_common(int dirfd, const char *pathnam
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = dirfd;  // Store fd in target_pid
     event->flags = 0;
     event->port = 0;
@@ -1899,6 +1963,7 @@ static __always_inline int handle_bpf_common(int cmd, unsigned int attr_size)
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = 0;
     event->port = 0;
@@ -2168,6 +2233,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
             event->target_pid = 0;
             event->flags = flags;
             event->port = 0;
@@ -2206,6 +2272,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
 
         // Fill process context (ppid, sid, pgid, tty)
         FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
         event->target_pid = 0;
         event->flags = flags;
         event->port = 0;
@@ -2245,6 +2312,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
 
         // Fill process context (ppid, sid, pgid, tty)
         FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
         event->target_pid = 0;
         event->flags = flags;
         event->port = 0;
@@ -2291,6 +2359,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
     event->flags = flags;
     event->port = 0;
@@ -2359,6 +2428,7 @@ static __always_inline int handle_fchmodat_common(int dfd, const char *pathname,
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     event->target_pid = 0;
     event->flags = mode;  // Store new mode with SUID/SGID bits
@@ -2543,6 +2613,7 @@ static __always_inline int handle_persistence_openat(int dfd, const char *pathna
 
     // Fill process context (ppid, sid, pgid, tty)
     FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
 
     bpf_ringbuf_submit(event, 0);
     return 0;

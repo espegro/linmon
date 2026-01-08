@@ -37,9 +37,10 @@ struct linmon_config {
     bool redact_sensitive;
 
     // Enrichment options
-    bool resolve_usernames;   // Resolve UID to username
-    bool hash_binaries;       // Calculate SHA256 of executables
-    bool verify_packages;     // Check if binaries belong to system packages
+    bool resolve_usernames;       // Resolve UID to username
+    bool hash_binaries;           // Calculate SHA256 of executables
+    bool verify_packages;         // Check if binaries belong to system packages
+    bool capture_container_metadata;  // Parse cgroups for container ID
 
     // Cache settings
     char *hash_cache_file;    // Path to hash cache file (default: /var/cache/linmon/hashes.cache)

@@ -114,6 +114,18 @@ LinMon monitors multiple event types:
 - Both fields are sparse (only present when detection occurs)
 - Applied to network, privilege, and security events
 
+**Container Metadata Fields** (v1.5.0+):
+- `container.runtime`: Container runtime type (docker, podman, kubernetes, containerd, lxc, systemd-nspawn)
+- `container.id`: Full container ID (64-char hex for Docker/Podman, or container name for LXC/systemd-nspawn)
+- `container.pod_id`: Kubernetes pod UUID (only for Kubernetes containers)
+- `container.ns_pid`: PID namespace inode number (for correlation and escape detection)
+- `container.ns_mnt`: Mount namespace inode number
+- `container.ns_net`: Network namespace inode number
+- Sparse field: Only present when process is running in container (zero overhead for host processes)
+- Detection method: Compares namespace inodes against init namespace, then parses `/proc/<pid>/cgroup`
+- Applied to all event types (process, file, network, privilege, security, persistence)
+- Config flag: `capture_container_metadata` (enabled by default)
+
 All events can be selectively enabled/disabled via configuration file.
 
 ### Filtering Architecture

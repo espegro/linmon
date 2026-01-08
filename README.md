@@ -10,6 +10,14 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **File Monitoring**: Track file create, modify, delete operations
 - **Privilege Escalation**: Detect setuid, setgid, and sudo usage
 
+### Container Support
+- **Container Detection**: Automatic detection of Docker, Podman, Kubernetes, containerd, LXC, systemd-nspawn
+- **Runtime Identification**: Identifies container runtime from cgroup parsing
+- **Container ID Extraction**: Full 64-char container IDs for Docker/Podman, pod UUIDs for Kubernetes
+- **Namespace Tracking**: Logs PID, mount, and network namespace inodes for escape detection
+- **Sparse Fields**: Zero JSON overhead for host processes, only containerized processes include metadata
+- **Correlation**: Namespace inodes enable tracking processes across container boundaries
+
 ### Advanced Filtering
 - **UID/GID Filtering**: Configurable to ignore system users (default: UID < 1000)
 - **TTY Filtering**: Optional filtering to only log interactive terminal sessions

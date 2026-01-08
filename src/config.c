@@ -35,9 +35,10 @@ static void set_defaults(struct linmon_config *config)
     config->ignore_threads = false;    // Default: log both processes and threads
     config->capture_cmdline = true;
     config->redact_sensitive = true;
-    config->resolve_usernames = true;  // Default: resolve UIDs
-    config->hash_binaries = true;      // Default: hash for security monitoring
-    config->verify_packages = false;   // Default: off (requires dpkg/rpm)
+    config->resolve_usernames = true;       // Default: resolve UIDs
+    config->hash_binaries = true;           // Default: hash for security monitoring
+    config->verify_packages = false;        // Default: off (requires dpkg/rpm)
+    config->capture_container_metadata = true;  // Default: on (parse container ID from cgroups)
 
     // Cache settings
     config->hash_cache_file = NULL;    // Use default path
@@ -212,6 +213,8 @@ int load_config(struct linmon_config *config, const char *config_file)
             config->hash_binaries = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "verify_packages") == 0) {
             config->verify_packages = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "capture_container_metadata") == 0) {
+            config->capture_container_metadata = (strcmp(value, "true") == 0);
         } else if (strcmp(key, "pkg_cache_file") == 0) {
             // Validate cache file path
             if (value[0] != '/') {
