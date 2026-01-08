@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -137,65 +138,66 @@ static void detect_pkg_manager(void)
     }
 }
 
-// Escape path for safe shell use (prevent command injection)
-// Escapes single quotes: ' becomes '\''
-// Returns 0 on success, -1 if output buffer too small or path contains invalid chars
-static int escape_path_for_shell(const char *path, char *escaped, size_t escaped_size)
-{
-    size_t j = 0;
-
-    for (size_t i = 0; path[i] != '\0'; i++) {
-        char c = path[i];
-
-        // Reject paths with newlines or null bytes (shouldn't happen but be safe)
-        if (c == '\n' || c == '\r')
-            return -1;
-
-        if (c == '\'') {
-            // Replace ' with '\'' (close quote, escaped quote, reopen quote)
-            if (j + 4 >= escaped_size)
-                return -1;
-            escaped[j++] = '\'';
-            escaped[j++] = '\\';
-            escaped[j++] = '\'';
-            escaped[j++] = '\'';
-        } else {
-            if (j + 1 >= escaped_size)
-                return -1;
-            escaped[j++] = c;
-        }
-    }
-
-    escaped[j] = '\0';
-    return 0;
-}
-
-// Helper to try package manager query with a specific path
+// Helper to execute package manager query without shell
+// Uses fork() + execve() to avoid shell injection vulnerabilities
 // Returns 0 on success with package name in buf, -1 on failure
 static int try_package_query(const char *query_path, char *buf, size_t buflen)
 {
-	FILE *fp;
-	char escaped_path[PKG_PATH_MAX * 4];
-	char cmd[PKG_PATH_MAX * 4 + 64];
+	int pipefd[2];
+	pid_t pid;
 	char line[256];
 	int ret = -1;
+	int status;
 
-	// Escape path to prevent command injection
-	if (escape_path_for_shell(query_path, escaped_path, sizeof(escaped_path)) != 0)
+	// Create pipe for reading command output
+	if (pipe(pipefd) == -1)
 		return -1;
 
-	// Build command based on package manager
-	if (detected_pkg_manager == PKG_DPKG) {
-		snprintf(cmd, sizeof(cmd), "/usr/bin/dpkg -S '%s' 2>/dev/null", escaped_path);
-	} else if (detected_pkg_manager == PKG_RPM) {
-		snprintf(cmd, sizeof(cmd), "/usr/bin/rpm -qf '%s' 2>/dev/null", escaped_path);
-	} else {
+	pid = fork();
+	if (pid == -1) {
+		close(pipefd[0]);
+		close(pipefd[1]);
 		return -1;
 	}
 
-	fp = popen(cmd, "r");
-	if (!fp)
+	if (pid == 0) {
+		// Child process: execute package manager
+		close(pipefd[0]);  // Close read end
+
+		// Redirect stdout to pipe
+		dup2(pipefd[1], STDOUT_FILENO);
+
+		// Redirect stderr to /dev/null
+		int devnull = open("/dev/null", O_WRONLY);
+		if (devnull != -1) {
+			dup2(devnull, STDERR_FILENO);
+			close(devnull);
+		}
+
+		close(pipefd[1]);
+
+		// Execute without shell - direct execve() call
+		if (detected_pkg_manager == PKG_DPKG) {
+			char *args[] = {"/usr/bin/dpkg", "-S", (char *)query_path, NULL};
+			execve("/usr/bin/dpkg", args, NULL);
+		} else if (detected_pkg_manager == PKG_RPM) {
+			char *args[] = {"/usr/bin/rpm", "-qf", (char *)query_path, NULL};
+			execve("/usr/bin/rpm", args, NULL);
+		}
+
+		// execve() only returns on error
+		_exit(127);
+	}
+
+	// Parent process: read output
+	close(pipefd[1]);  // Close write end
+
+	FILE *fp = fdopen(pipefd[0], "r");
+	if (!fp) {
+		close(pipefd[0]);
+		waitpid(pid, NULL, 0);
 		return -1;
+	}
 
 	if (fgets(line, sizeof(line), fp)) {
 		// Remove trailing newline
@@ -241,7 +243,18 @@ static int try_package_query(const char *query_path, char *buf, size_t buflen)
 		}
 	}
 
-	pclose(fp);
+	fclose(fp);  // Closes pipefd[0] as well
+
+	// Wait for child process to complete
+	if (waitpid(pid, &status, 0) == -1)
+		return -1;
+
+	// Check if child exited successfully
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+		// dpkg/rpm failed or crashed
+		return -1;
+	}
+
 	return ret;
 }
 
