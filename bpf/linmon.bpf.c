@@ -2655,34 +2655,65 @@ static __always_inline int is_raw_block_device(const char *path)
 
     // After /dev/ (index 5)
     char c5 = path[5];
+
+    // Need at least 2 more chars after /dev/ for shortest device names
+    if (path[6] == '\0')
+        return 0;
     char c6 = path[6];
+
+    if (path[7] == '\0')
+        return 0;
     char c7 = path[7];
 
     // SCSI/SATA disks: /dev/sd[a-z] (whole disk or partitions)
     if (c5 == 's' && c6 == 'd' && c7 >= 'a' && c7 <= 'z') {
-        return 1;
+        // Validate next char: null (whole disk), digit (partition), or 'p' (nvme-style partition)
+        char c8 = path[8];
+        if (c8 == '\0' || (c8 >= '0' && c8 <= '9'))
+            return 1;
     }
 
     // NVMe disks: /dev/nvme[0-9]n[0-9] (whole disk or partitions)
-    if (c5 == 'n' && c6 == 'v' && c7 == 'm' && path[8] == 'e' &&
-        path[9] >= '0' && path[9] <= '9') {
-        return 1;
+    // Need at least 10 chars: /dev/nvme0n1
+    if (c5 == 'n' && c6 == 'v' && c7 == 'm') {
+        if (path[8] == '\0' || path[9] == '\0')
+            return 0;
+        if (path[8] == 'e' && path[9] >= '0' && path[9] <= '9') {
+            // Check for 'n' separator
+            if (path[10] == '\0')
+                return 0;
+            if (path[10] == 'n' && path[11] >= '0' && path[11] <= '9')
+                return 1;
+        }
     }
 
     // Virtio block devices: /dev/vd[a-z]
     if (c5 == 'v' && c6 == 'd' && c7 >= 'a' && c7 <= 'z') {
-        return 1;
+        char c8 = path[8];
+        if (c8 == '\0' || (c8 >= '0' && c8 <= '9'))
+            return 1;
     }
 
     // Xen virtual block devices: /dev/xvd[a-z]
-    if (c5 == 'x' && c6 == 'v' && c7 == 'd' && path[8] >= 'a' && path[8] <= 'z') {
-        return 1;
+    if (c5 == 'x' && c6 == 'v' && c7 == 'd') {
+        if (path[8] == '\0')
+            return 0;
+        if (path[8] >= 'a' && path[8] <= 'z') {
+            char c9 = path[9];
+            if (c9 == '\0' || (c9 >= '0' && c9 <= '9'))
+                return 1;
+        }
     }
 
     // MMC/SD cards: /dev/mmcblk[0-9]
-    if (c5 == 'm' && c6 == 'm' && c7 == 'c' && path[8] == 'b' &&
-        path[9] == 'l' && path[10] == 'k' && path[11] >= '0' && path[11] <= '9') {
-        return 1;
+    // Need at least 12 chars: /dev/mmcblk0
+    if (c5 == 'm' && c6 == 'm' && c7 == 'c') {
+        if (path[8] == '\0' || path[9] == '\0' || path[10] == '\0' || path[11] == '\0')
+            return 0;
+        if (path[8] == 'b' && path[9] == 'l' && path[10] == 'k' &&
+            path[11] >= '0' && path[11] <= '9') {
+            return 1;
+        }
     }
 
     // Software RAID: /dev/md[0-9]
@@ -2691,14 +2722,19 @@ static __always_inline int is_raw_block_device(const char *path)
     }
 
     // Device mapper (LVM, LUKS): /dev/dm-[0-9]
-    if (c5 == 'd' && c6 == 'm' && c7 == '-' && path[8] >= '0' && path[8] <= '9') {
-        return 1;
+    if (c5 == 'd' && c6 == 'm' && c7 == '-') {
+        if (path[8] == '\0')
+            return 0;
+        if (path[8] >= '0' && path[8] <= '9')
+            return 1;
     }
 
     // Loop devices: /dev/loop[0-9]
-    if (c5 == 'l' && c6 == 'o' && c7 == 'o' && path[8] == 'p' &&
-        path[9] >= '0' && path[9] <= '9') {
-        return 1;
+    if (c5 == 'l' && c6 == 'o' && c7 == 'o') {
+        if (path[8] == '\0' || path[9] == '\0')
+            return 0;
+        if (path[8] == 'p' && path[9] >= '0' && path[9] <= '9')
+            return 1;
     }
 
     return 0;  // Not a raw block device
