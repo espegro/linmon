@@ -1,3 +1,5 @@
+<img width="589" height="653" alt="image" src="https://github.com/user-attachments/assets/e09e12a0-79e3-4d12-aa75-7a5eb81e195f" />
+
 # LinMon - Linux Activity Monitor
 
 LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interactive user activity, similar to Sysmon for Windows. It uses eBPF (Extended Berkeley Packet Filter) to instrument the kernel with minimal overhead.
