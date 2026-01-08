@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-01-08
+
+### Added
+
+#### Raw Disk Access Detection (T1561.001/002 - Disk Wipe)
+- **Detects write access to raw block devices** to identify disk wipe attacks, ransomware destructive payloads, and anti-forensics activity
+- **Monitored device types**:
+  - SCSI/SATA disks: `/dev/sd*` (whole disks and partitions)
+  - NVMe disks: `/dev/nvme*`
+  - Virtio block devices: `/dev/vd*`
+  - Xen virtual block devices: `/dev/xvd*`
+  - MMC/SD cards: `/dev/mmcblk*`
+  - Software RAID: `/dev/md*`
+  - Device mapper (LVM, LUKS): `/dev/dm-*`
+  - Loop devices: `/dev/loop*`
+- **Implementation**:
+  - eBPF `openat()` syscall monitoring for `O_WRONLY`/`O_RDWR` flags
+  - Pattern matching in kernel space using `is_raw_block_device()` helper
+  - Both tracepoint and kprobe versions for RHEL compatibility
+  - Rate limiting and UID filtering applied
+- **Configuration**: `monitor_raw_disk_access = true` (enabled by default)
+- **Event type**: `raw_disk_access`
+- **Event fields**: `device` (path), `open_flags`, `write_access` (boolean)
+- **Use cases**:
+  - Ransomware final stage: Wiping MBR/GPT to prevent recovery
+  - Sabotage: `dd if=/dev/zero of=/dev/sda`
+  - Anti-forensics: `shred /dev/nvme0n1`
+  - Destructive malware: Disk wipers in targeted attacks
+- **Performance**: Low noise - legitimate writes to raw devices are rare (disk imaging, installers, encryption setup)
+
+**Example event**:
+```json
+{
+  "type": "raw_disk_access",
+  "pid": 12345,
+  "uid": 0,
+  "comm": "dd",
+  "device": "/dev/sda",
+  "open_flags": 2,
+  "write_access": true
+}
+```
+
+### Changed
+
+#### Security Hardening: Eliminated Shell Injection Risks in Package Queries
+- **Replaced `popen()` with `fork()+execve()`** for all package manager queries
+- **Security improvement**: Completely eliminates shell injection attack surface
+- **Implementation details**:
+  - Direct `execve()` calls with argument arrays (no shell interpretation)
+  - Pipe-based IPC for parent-child communication
+  - Proper process cleanup with `waitpid()`
+  - Exit status validation before trusting output
+- **Affected code**: `src/pkgcache.c` - Package verification cache
+- **Tested with**: dpkg (Debian/Ubuntu) and rpm (RHEL/Rocky) package managers
+- **Impact**: No functional changes, purely security improvement
+- **Technical note**: Follows principle of least authority - never invoke shell when direct syscalls suffice
+
 ## [1.5.0] - 2026-01-08
 
 ### Added
