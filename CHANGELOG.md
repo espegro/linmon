@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-01-09
+
+### Fixed
+
+#### Critical Buffer Over-Read in Raw Disk Access Detection
+- **Fixed buffer over-read vulnerability** in `is_raw_block_device()` eBPF function
+- **Issue**: Array indices were accessed without verifying null-byte termination
+  - Reading `path[6]`, `path[7]` without checking if string was long enough
+  - Could read uninitialized stack memory for short paths like `/dev/s`
+  - Would cause BPF verifier rejection in strict environments
+- **Impact**:
+  - Critical security fix - prevents undefined behavior in kernel space
+  - Eliminates risk of BPF program load failures
+  - Required for production deployment
+- **Fix details**:
+  - Added null-byte checks before all array index accesses
+  - Validates string length incrementally before reading each character
+  - BPF verifier now accepts program without issues
+- **Files changed**: `bpf/linmon.bpf.c` (51 insertions, 15 deletions)
+
+#### Improved Device Path Validation
+- **Enhanced validation** to prevent false positives from invalid device paths
+- **Previous behavior**: `/dev/sdFOOBAR` would incorrectly match as valid disk
+- **Fixed validation** for all device types:
+  - SCSI/SATA (`/dev/sd*`): Verify next char is null-terminator or partition digit
+  - NVMe (`/dev/nvme*`): Check minimum length and validate `nvme[0-9]n[0-9]` format
+  - Virtio (`/dev/vd*`): Validate partition number suffix
+  - Xen (`/dev/xvd*`): Check string length before accessing drive letter
+  - MMC/SD (`/dev/mmcblk*`): Verify all required characters exist before access
+  - Device Mapper (`/dev/dm-*`): Null-check before device number validation
+  - Loop devices (`/dev/loop*`): Validate length before accessing device number
+- **Result**: More precise detection, eliminates false positives
+
+**Upgrade recommendation**: All v1.6.0 users should upgrade immediately to fix buffer over-read.
+
 ## [1.6.0] - 2026-01-08
 
 ### Added
