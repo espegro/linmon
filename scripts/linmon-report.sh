@@ -166,7 +166,7 @@ fi
 count_events() {
     echo -e "${BOLD}Event Type Summary${NC}"
     echo "=================="
-    cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | .type" | sort | uniq -c | sort -rn | while read count type; do
+    grep '^{' "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | .type" 2>/dev/null | sort | uniq -c | sort -rn | while read count type; do
         printf "%6d  %s\n" "$count" "$type"
     done
     echo
@@ -176,7 +176,7 @@ count_events() {
 count_users() {
     echo -e "${BOLD}Activity by User${NC}"
     echo "================"
-    cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | .username // \"unknown\"" | sort | uniq -c | sort -rn | head -20 | while read count user; do
+    grep '^{' "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | .username // \"unknown\"" 2>/dev/null | sort | uniq -c | sort -rn | head -20 | while read count user; do
         printf "%6d  %s\n" "$count" "$user"
     done
     echo
@@ -187,7 +187,7 @@ show_security_events() {
     echo -e "${BOLD}${RED}Security Events${NC}"
     echo "==============="
 
-    cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | select(.type | startswith(\"security_\") or . == \"raw_disk_access\")" | $LIMIT_CMD | while IFS= read -r line; do
+    grep '^{' "$LOG_FILE" | $SORT_CMD | jq -c "$JQ_FILTER | select(.type | startswith(\"security_\") or . == \"raw_disk_access\")" 2>/dev/null | $LIMIT_CMD | while IFS= read -r line; do
         timestamp=$(echo "$line" | jq -r '.timestamp')
         type=$(echo "$line" | jq -r '.type')
         user=$(echo "$line" | jq -r '.username // "unknown"')
@@ -232,7 +232,7 @@ show_privilege_events() {
     echo -e "${BOLD}${YELLOW}Privilege Changes${NC}"
     echo "================="
 
-    cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | select(.type | startswith(\"priv_\"))" | $LIMIT_CMD | while IFS= read -r line; do
+    grep '^{' "$LOG_FILE" | $SORT_CMD | jq -c "$JQ_FILTER | select(.type | startswith(\"priv_\"))" 2>/dev/null | $LIMIT_CMD | while IFS= read -r line; do
         timestamp=$(echo "$line" | jq -r '.timestamp')
         type=$(echo "$line" | jq -r '.type')
         user=$(echo "$line" | jq -r '.username // "unknown"')
@@ -254,7 +254,7 @@ show_network_events() {
     echo -e "${BOLD}${BLUE}Network Connections${NC}"
     echo "==================="
 
-    cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | select(.type | startswith(\"net_\"))" | $LIMIT_CMD | while IFS= read -r line; do
+    grep '^{' "$LOG_FILE" | $SORT_CMD | jq -c "$JQ_FILTER | select(.type | startswith(\"net_\"))" 2>/dev/null | $LIMIT_CMD | while IFS= read -r line; do
         timestamp=$(echo "$line" | jq -r '.timestamp')
         type=$(echo "$line" | jq -r '.type')
         user=$(echo "$line" | jq -r '.username // "unknown"')
@@ -287,7 +287,7 @@ show_process_events() {
     echo -e "${BOLD}${GREEN}Process Executions${NC}"
     echo "==================="
 
-    cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | select(.type == \"process_exec\")" | $LIMIT_CMD | while IFS= read -r line; do
+    grep '^{' "$LOG_FILE" | $SORT_CMD | jq -c "$JQ_FILTER | select(.type == \"process_exec\")" 2>/dev/null | $LIMIT_CMD | while IFS= read -r line; do
         timestamp=$(echo "$line" | jq -r '.timestamp')
         user=$(echo "$line" | jq -r '.username // "unknown"')
         pid=$(echo "$line" | jq -r '.pid')
@@ -316,7 +316,7 @@ generate_summary() {
     echo
 
     # Total event count
-    total=$(cat "$LOG_FILE" | jq -r "$JQ_FILTER" | wc -l)
+    total=$(grep '^{' "$LOG_FILE" | jq -r "$JQ_FILTER" 2>/dev/null | wc -l)
     echo -e "Total events: ${BOLD}$total${NC}"
     echo
 
@@ -334,11 +334,11 @@ case "$OUTPUT_FORMAT" in
         generate_summary
         ;;
     json)
-        cat "$LOG_FILE" | $SORT_CMD | jq -c "$JQ_FILTER" | $LIMIT_CMD
+        grep '^{' "$LOG_FILE" | $SORT_CMD | jq -c "$JQ_FILTER" 2>/dev/null | $LIMIT_CMD
         ;;
     csv)
         echo "timestamp,type,username,pid,details"
-        cat "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | [.timestamp, .type, .username // \"unknown\", .pid, (.cmdline // .filename // .device // \"\")] | @csv" | $LIMIT_CMD
+        grep '^{' "$LOG_FILE" | $SORT_CMD | jq -r "$JQ_FILTER | [.timestamp, .type, .username // \"unknown\", .pid, (.cmdline // .filename // .device // \"\")] | @csv" 2>/dev/null | $LIMIT_CMD
         ;;
     *)
         echo "Error: Unknown output format: $OUTPUT_FORMAT" >&2
