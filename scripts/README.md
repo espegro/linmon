@@ -6,6 +6,53 @@ For **optional** rootkit prevention features (LKRG integration), see **[extras/l
 
 ## Scripts
 
+### `linmon-report.sh`
+
+**Purpose**: Generate human-readable activity reports from LinMon JSON event logs.
+
+**What it does**:
+1. Parses LinMon JSON events into readable summaries
+2. Shows statistics by event type and user
+3. Highlights security events (PTRACE, MEMFD, credential access, etc.)
+4. Filters by time, user, or event type
+5. Supports multiple output formats (text, JSON, CSV)
+
+**Usage**:
+```bash
+# Summary of all activity
+sudo ./scripts/linmon-report.sh
+
+# Security events from last hour
+sudo ./scripts/linmon-report.sh --time 60 --security-only
+
+# Network activity for specific user
+sudo ./scripts/linmon-report.sh --user alice --event net_connect_tcp
+
+# Recent process executions (newest first)
+sudo ./scripts/linmon-report.sh --event process_exec --limit 20 --reverse
+```
+
+**Requirements**:
+- Root access (to read `/var/log/linmon/events.json`)
+- `jq` installed (`sudo apt-get install jq`)
+
+**Example output**:
+```
+Event Type Summary
+==================
+   1234  process_exec
+    456  net_connect_tcp
+     89  priv_setuid
+     12  security_ptrace
+
+Security Events
+===============
+[14:23:45] PTRACE: alice (PID 12345) attached to PID 6789
+[14:25:12] CRED_READ: bob (PID 23456) accessed: /etc/shadow
+```
+
+---
+
 ### `harden-system.sh`
 
 **Purpose**: Implements multi-layer defense against kernel rootkits using standard Linux security features.
@@ -175,7 +222,11 @@ lsmod | grep lkrg
 # Run AIDE integrity check
 sudo aide --check
 
-# Review LinMon logs
+# Review LinMon activity (new!)
+sudo ./scripts/linmon-report.sh --time 1440  # Last 24 hours
+sudo ./scripts/linmon-report.sh --security-only  # Security events only
+
+# Review LinMon logs (raw)
 sudo journalctl -u linmond --since "24 hours ago"
 tail -f /var/log/linmon/events.json
 ```
