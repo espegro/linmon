@@ -557,6 +557,19 @@ The version is passed to the compiler via `-DLINMON_VERSION` and used in:
    ./scripts/create-release.sh  # Automatically uses VERSION file
    ```
 9. GitHub Actions will automatically build Ubuntu 24.04 + RHEL 9 binaries and attach to release
+10. **CRITICAL: Update GitHub release with detailed notes** after GitHub Actions completes:
+   ```bash
+   # Extract and format release notes from CHANGELOG
+   VERSION=$(cat VERSION)
+
+   # Create formatted release notes file
+   sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | \
+     sed '1d' | sed '$d' | sed '/^$/d' > /tmp/release_notes.md
+
+   # Update the auto-created release with detailed notes
+   gh release edit v$VERSION --notes-file /tmp/release_notes.md
+   ```
+   **Why this matters**: GitHub Actions creates a generic release. Users need detailed security/feature information.
 
 **Important:** Always include detailed release notes in CHANGELOG.md following Keep a Changelog format:
 - `### Added` - New features
