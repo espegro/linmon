@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-01-10
+
+### Fixed
+
+#### Security Hardening - Error Handling and Input Validation
+- **Fixed missing error handling in file hash cache persistence** (`src/filehash.c`)
+  - `fprintf()` calls in `filehash_save()` now check return values
+  - Prevents corrupted cache file if disk is full or I/O errors occur
+  - Properly cleans up (unlock mutex, close file, unlink temp) on write failure
+  - **Severity**: HIGH - Could cause cache corruption on disk full conditions
+
+- **Fixed insufficient input validation in SUDO_UID parsing** (`src/procfs.c`)
+  - `strtoul()` conversion in `procfs_read_sudo_info()` now validates with `endptr`
+  - Prevents accepting invalid data like `SUDO_UID=garbage` as UID 0
+  - Checks that entire string was converted successfully
+  - **Severity**: MEDIUM - Could allow privilege escalation tracking bypass
+
+- **Added NULL pointer protection in process filtering** (`src/filter.c`)
+  - `filter_should_log_process()` now checks for NULL `comm` parameter
+  - Returns `false` safely instead of potential segfault
+  - Defensive programming against caller errors
+  - **Severity**: MEDIUM - Prevents crash on malformed input
+
+- **Improved getpwuid_r() buffer handling** (`src/userdb.c`)
+  - Increased buffer size from 2048 to 4096 bytes for systems with many groups
+  - Added ERANGE error detection with warning message
+  - Graceful fallback to `UID_XXX` format on buffer overflow
+  - **Severity**: LOW - Improves compatibility on edge-case systems
+
+**Credits**: Security audit findings from external code scanner (qwen2.5-coder:32b)
+
+**Upgrade recommendation**: Recommended for all users. Fixes improve robustness and prevent edge-case failures.
+
 ## [1.6.1] - 2026-01-09
 
 ### Fixed

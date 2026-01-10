@@ -187,6 +187,9 @@ bool filter_should_log_process(const char *comm)
 {
     int i;
 
+    if (!comm)
+        return false;
+
     // Check whitelist first (if configured)
     if (only_count > 0) {
         for (i = 0; i < only_count; i++) {

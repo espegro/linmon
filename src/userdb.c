@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <pwd.h>
 #include <pthread.h>
 
@@ -47,9 +48,10 @@ void userdb_resolve(uid_t uid, char *buf, size_t buf_size)
 {
     struct passwd pwd;
     struct passwd *result;
-    char pwbuf[2048];  // Increased from 1024 - some systems need larger buffer
+    char pwbuf[4096];  // Larger buffer to handle systems with many groups
     int idx;
     bool cache_hit;
+    int ret;
 
     if (!buf || buf_size == 0)
         return;
@@ -69,7 +71,8 @@ void userdb_resolve(uid_t uid, char *buf, size_t buf_size)
     pthread_mutex_unlock(&cache_mutex);
 
     // Look up user (this is slow - OK to do without lock)
-    if (getpwuid_r(uid, &pwd, pwbuf, sizeof(pwbuf), &result) == 0 && result) {
+    ret = getpwuid_r(uid, &pwd, pwbuf, sizeof(pwbuf), &result);
+    if (ret == 0 && result) {
         // Success - update cache and return
         pthread_mutex_lock(&cache_mutex);
         // Re-check cache in case another thread updated it while we were unlocked
@@ -85,7 +88,12 @@ void userdb_resolve(uid_t uid, char *buf, size_t buf_size)
         }
         pthread_mutex_unlock(&cache_mutex);
     } else {
-        // User not found - use UID_XXXX format and cache negative result
+        // User not found or error - use UID_XXXX format and cache negative result
+        // Log warning if buffer was too small (ERANGE)
+        if (ret == ERANGE) {
+            fprintf(stderr, "Warning: getpwuid_r buffer too small for UID %u\n", uid);
+        }
+
         snprintf(buf, buf_size, "UID_%u", uid);
 
         pthread_mutex_lock(&cache_mutex);

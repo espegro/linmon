@@ -92,8 +92,13 @@ bool procfs_read_sudo_info(pid_t pid, uid_t *sudo_uid, char *sudo_user, size_t s
 
     while (ptr < end) {
         if (strncmp(ptr, "SUDO_UID=", 9) == 0 && sudo_uid) {
-            *sudo_uid = (uid_t)strtoul(ptr + 9, NULL, 10);
-            found_uid = true;
+            char *endptr;
+            unsigned long val = strtoul(ptr + 9, &endptr, 10);
+            // Validate conversion: endptr should point to null or newline, not same as start
+            if (endptr != ptr + 9 && (*endptr == '\0' || *endptr == '\n')) {
+                *sudo_uid = (uid_t)val;
+                found_uid = true;
+            }
         } else if (strncmp(ptr, "SUDO_USER=", 10) == 0 && sudo_user && sudo_user_len > 0) {
             strncpy(sudo_user, ptr + 10, sudo_user_len - 1);
             sudo_user[sudo_user_len - 1] = '\0';

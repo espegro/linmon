@@ -292,21 +292,32 @@ int filehash_save(void)
     }
 
     // Write header
-    fprintf(fp, "# LinMon hash cache v1\n");
-    fprintf(fp, "# path|dev|ino|mtime|size|sha256\n");
+    if (fprintf(fp, "# LinMon hash cache v1\n") < 0 ||
+        fprintf(fp, "# path|dev|ino|mtime|size|sha256\n") < 0) {
+        int saved_errno = errno;
+        fclose(fp);
+        unlink(tmp_path);
+        return -saved_errno;
+    }
 
     pthread_mutex_lock(&cache_mutex);
 
     for (int i = 0; i < HASH_BUCKETS; i++) {
         struct hash_entry *entry = hash_table[i];
         while (entry) {
-            fprintf(fp, "%s|%lu|%lu|%ld|%ld|%s\n",
+            if (fprintf(fp, "%s|%lu|%lu|%ld|%ld|%s\n",
                     entry->path,
                     (unsigned long)entry->dev,
                     (unsigned long)entry->ino,
                     (long)entry->mtime,
                     (long)entry->size,
-                    entry->hash);
+                    entry->hash) < 0) {
+                int saved_errno = errno;
+                pthread_mutex_unlock(&cache_mutex);
+                fclose(fp);
+                unlink(tmp_path);
+                return -saved_errno;
+            }
             saved++;
             entry = entry->next;
         }
