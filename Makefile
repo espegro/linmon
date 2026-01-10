@@ -156,6 +156,17 @@ install: $(BUILD_DIR)/$(DAEMON)
 	fi
 	chmod 0644 /etc/logrotate.d/$(DAEMON)
 	chmod 0750 /var/log/linmon /var/cache/linmon
+	# Fix permissions on existing log files (defense in depth)
+	@if [ -f /var/log/linmon/events.json ]; then \
+		echo "Fixing permissions on existing log file..."; \
+		chmod 0640 /var/log/linmon/events.json; \
+	fi
+	# Fix permissions on rotated log files
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if [ -f /var/log/linmon/events.json.$$i ]; then \
+			chmod 0640 /var/log/linmon/events.json.$$i; \
+		fi; \
+	done
 	systemctl daemon-reload
 	@echo ""
 	@echo "Installation complete. Use 'systemctl start linmond' to start the service."

@@ -500,18 +500,29 @@ int pkgcache_save(void)
 
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", cache_file_path);
 
+    // Set restrictive umask before file creation (prevents world-readable files)
+    mode_t old_umask = umask(0077);
+
     fp = fopen(tmp_path, "w");
-    if (!fp)
-        return -errno;
+    if (!fp) {
+        int saved_errno = errno;
+        umask(old_umask);  // Restore umask before returning
+        return -saved_errno;
+    }
 
     // Set restrictive permissions on cache file (0600 = rw-------)
     // This prevents information leakage of system paths
+    // Even though umask is 0077, explicitly set permissions for defense in depth
     if (fchmod(fileno(fp), 0600) != 0) {
         int saved_errno = errno;
+        umask(old_umask);  // Restore umask before error return
         fclose(fp);
         unlink(tmp_path);
         return -saved_errno;
     }
+
+    // Restore original umask (don't affect other operations)
+    umask(old_umask);
 
     // Write header
     fprintf(fp, "# LinMon package cache v2\n");

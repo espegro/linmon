@@ -48,10 +48,22 @@ static const unsigned long ROTATION_CHECK_INTERVAL = 4096;  // Check every 4KB w
 
 int logger_init(const char *log_file)
 {
+    // Set restrictive umask for log file creation (prevents world-readable files)
+    mode_t old_umask = umask(0077);
+
     log_fp = fopen(log_file, "a");
     if (!log_fp) {
-        return -errno;
+        int saved_errno = errno;
+        umask(old_umask);  // Restore umask before returning
+        return -saved_errno;
     }
+
+    // Set permissions to 0640 (rw-r-----) for defense in depth
+    // Even though directory is 0750, file should also have restrictive permissions
+    chmod(log_file, 0640);
+
+    // Restore original umask (don't affect other operations)
+    umask(old_umask);
 
     // Set line buffering
     setlinebuf(log_fp);
@@ -131,14 +143,18 @@ static void rotate_log_file(void)
     snprintf(new_path, sizeof(new_path), "%s.1", rotation_base_path);
     rename(rotation_base_path, new_path);
 
-    // Open fresh log file
+    // Open fresh log file with restrictive permissions
+    mode_t old_umask = umask(0077);
     new_fp = fopen(rotation_base_path, "a");
     if (new_fp) {
+        chmod(rotation_base_path, 0640);  // Set restrictive permissions
+        umask(old_umask);
         setlinebuf(new_fp);
         log_fp = new_fp;
         bytes_written = 0;
         fprintf(stderr, "Log rotated: %s\n", rotation_base_path);
     } else {
+        umask(old_umask);
         fprintf(stderr, "ERROR: Failed to reopen log after rotation: %s\n",
                 strerror(errno));
     }
