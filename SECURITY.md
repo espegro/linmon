@@ -77,7 +77,61 @@ sudo chown root:root /etc/linmon/linmon.conf
 sudo chmod 0600 /etc/linmon/linmon.conf
 ```
 
-### 3. Integer Overflow Protection
+### 3. Immutable Flags (Tamper Protection)
+
+LinMon sets the immutable flag on critical files during installation to prevent modification even by root:
+
+**Protected files**:
+- `/usr/local/sbin/linmond` - Binary executable
+- `/etc/linmon/linmon.conf` - Configuration file
+
+The immutable flag (`chattr +i`) prevents:
+- ❌ File modification (even by root)
+- ❌ File deletion (even by root)
+- ❌ File renaming (even by root)
+- ✅ File can still be read
+
+**Modifying protected files**:
+
+To edit configuration:
+```bash
+# Remove immutable flag
+sudo chattr -i /etc/linmon/linmon.conf
+
+# Edit configuration
+sudo vi /etc/linmon/linmon.conf
+
+# Restore immutable flag
+sudo chattr +i /etc/linmon/linmon.conf
+
+# Reload daemon
+sudo systemctl reload linmond
+```
+
+To upgrade LinMon:
+```bash
+# make install automatically handles immutable flags
+sudo make install
+```
+
+**Security benefits**:
+- Raises the bar for attackers (extra step required)
+- Can be logged with auditd for forensic detection:
+  ```bash
+  # /etc/audit/rules.d/linmon.rules
+  -w /usr/local/sbin/linmond -p wa -k linmon_tamper
+  -a always,exit -F exe=/usr/bin/chattr -F success=1 -k immutable_removed
+  ```
+
+**Checking immutable status**:
+```bash
+lsattr /usr/local/sbin/linmond /etc/linmon/linmon.conf
+# Output: ----i---------e------- (i = immutable)
+```
+
+**Note**: Root can remove the immutable flag with `chattr -i`, but this action can be logged by auditd for tamper detection.
+
+### 4. Integer Overflow Protection
 UID parsing uses `strtoul()` instead of `atoi()`:
 - Validates input is pure decimal
 - Checks for overflow (> UINT_MAX)

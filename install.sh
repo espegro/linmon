@@ -68,6 +68,10 @@ fi
 
 chown root:root /etc/linmon/linmon.conf
 chmod 0600 /etc/linmon/linmon.conf
+
+# Set immutable flag on config (requires root, prevents modification even by root)
+chattr +i /etc/linmon/linmon.conf 2>/dev/null || echo -e "${YELLOW}⚠${NC} Could not set immutable flag (chattr not available or not supported)"
+
 echo -e "${GREEN}✓${NC} Config permissions: root:root, mode: 0600"
 
 # 3. Install binary
@@ -89,6 +93,9 @@ if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
         echo -e "${GREEN}✓${NC} SELinux context restored"
     fi
 fi
+
+# Set immutable flag on binary (requires root, prevents modification even by root)
+chattr +i /usr/local/sbin/linmond 2>/dev/null || echo -e "${YELLOW}⚠${NC} Could not set immutable flag (chattr not available or not supported)"
 
 echo -e "${GREEN}✓${NC} Installed binary: /usr/local/sbin/linmond"
 

@@ -98,6 +98,9 @@ clean:
 	rm -f $(SRC_DIR)/*.skel.h
 
 install: $(BUILD_DIR)/$(DAEMON)
+	# Remove immutable flag if exists (from previous install)
+	@chattr -i /usr/local/sbin/$(DAEMON) 2>/dev/null || true
+	@chattr -i /etc/linmon/linmon.conf 2>/dev/null || true
 	install -D -m 755 $(BUILD_DIR)/$(DAEMON) /usr/local/sbin/$(DAEMON)
 	install -D -m 644 $(DAEMON).service /etc/systemd/system/$(DAEMON).service
 	mkdir -p /etc/linmon
@@ -168,12 +171,22 @@ install: $(BUILD_DIR)/$(DAEMON)
 		fi; \
 	done
 	systemctl daemon-reload
+	# Set immutable flags on binary and config (prevents modification even by root)
+	@chattr +i /usr/local/sbin/$(DAEMON) 2>/dev/null || echo "Warning: Could not set immutable flag on binary"
+	@chattr +i /etc/linmon/linmon.conf 2>/dev/null || echo "Warning: Could not set immutable flag on config"
 	@echo ""
 	@echo "Installation complete. Use 'systemctl start linmond' to start the service."
+	@echo ""
+	@echo "Note: Binary and config are protected with immutable flag."
+	@echo "To modify config: chattr -i /etc/linmon/linmon.conf, edit, then chattr +i"
+	@echo "To upgrade: run 'make install' (automatically handles immutable flags)"
 
 uninstall:
 	systemctl stop $(DAEMON) || true
 	systemctl disable $(DAEMON) || true
+	# Remove immutable flags before deletion
+	@chattr -i /usr/local/sbin/$(DAEMON) 2>/dev/null || true
+	@chattr -i /etc/linmon/linmon.conf 2>/dev/null || true
 	rm -f /usr/local/sbin/$(DAEMON)
 	rm -f /etc/systemd/system/$(DAEMON).service
 	rm -f /etc/logrotate.d/$(DAEMON)
