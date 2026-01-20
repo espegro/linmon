@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# LinMon Watchdog Timer - Runs health checks every 5 minutes
+
+[Unit]
+Description=LinMon Health Check Timer
+Requires=linmond.service
+After=linmond.service
+
+[Timer]
+# Run every 5 minutes
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+# Run even if previous check is still running
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

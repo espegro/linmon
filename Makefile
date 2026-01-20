@@ -6,8 +6,10 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
 BUILD_DIR := build
 SRC_DIR := src
 BPF_DIR := bpf
+TEST_DIR := tests
 OBJ_DIR := $(BUILD_DIR)/obj
 BPF_OBJ_DIR := $(BUILD_DIR)/bpf
+TEST_BIN_DIR := $(BUILD_DIR)/tests
 
 # Tools
 CLANG := clang
@@ -67,13 +69,18 @@ BPF_SKELS := $(patsubst $(BPF_DIR)/%.bpf.c,$(SRC_DIR)/%.skel.h,$(BPF_SOURCES))
 DAEMON_SOURCES := $(wildcard $(SRC_DIR)/*.c)
 DAEMON_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(DAEMON_SOURCES))
 
+# Test configuration
+TEST_SOURCES := $(wildcard $(TEST_DIR)/*.c)
+TEST_BINS := $(patsubst $(TEST_DIR)/%.c,$(TEST_BIN_DIR)/%,$(TEST_SOURCES))
+TEST_CFLAGS := -Wall -Wextra -O2 -g $(INCLUDES)
+
 # Targets
-.PHONY: all clean install uninstall
+.PHONY: all clean install uninstall test
 
 all: $(BUILD_DIR)/$(DAEMON)
 
 # Create directories
-$(BUILD_DIR) $(OBJ_DIR) $(BPF_OBJ_DIR):
+$(BUILD_DIR) $(OBJ_DIR) $(BPF_OBJ_DIR) $(TEST_BIN_DIR):
 	mkdir -p $@
 
 # Compile BPF programs
@@ -92,6 +99,38 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(BPF_SKELS) | $(OBJ_DIR)
 # Link daemon
 $(BUILD_DIR)/$(DAEMON): $(DAEMON_OBJECTS) | $(BUILD_DIR)
 	$(CC) $(DAEMON_OBJECTS) $(LDFLAGS) -o $@
+
+# Test targets
+
+# Compile test for filter.c
+$(TEST_BIN_DIR)/test_filter: $(TEST_DIR)/test_filter.c $(SRC_DIR)/filter.c $(SRC_DIR)/config.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $^ -o $@
+
+# Compile test for logger.c (only tests json_escape function, duplicated in test)
+$(TEST_BIN_DIR)/test_logger: $(TEST_DIR)/test_logger.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $< -o $@
+
+# Compile test for config.c
+$(TEST_BIN_DIR)/test_config: $(TEST_DIR)/test_config.c $(SRC_DIR)/config.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $^ -o $@
+
+# Compile test for procfs.c
+$(TEST_BIN_DIR)/test_procfs: $(TEST_DIR)/test_procfs.c $(SRC_DIR)/procfs.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $^ -o $@
+
+# Run all tests
+test: $(TEST_BINS)
+	@echo ""
+	@echo "Running LinMon Unit Tests..."
+	@echo "=============================="
+	@for test in $(TEST_BINS); do \
+		echo ""; \
+		$$test || exit 1; \
+	done
+	@echo ""
+	@echo "=============================="
+	@echo "All tests passed!"
+	@echo ""
 
 clean:
 	rm -rf $(BUILD_DIR)

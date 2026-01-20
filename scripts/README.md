@@ -36,6 +36,49 @@ sudo ./scripts/linmon-report.sh --event process_exec --limit 20 --reverse
 - Root access (to read `/var/log/linmon/events.json`)
 - `jq` installed (`sudo apt-get install jq`)
 
+---
+
+### `linmon-watchdog.sh` (Optional)
+
+**Purpose**: Health monitoring for LinMon daemon - detects failures systemd restart alone cannot catch.
+
+**What it detects**:
+- Service crashes or stops
+- Process hangs (deadlock)
+- No events logged (eBPF programs unloaded)
+- Immutable flags removed (tampering)
+- Binary modified (rootkit replacement)
+- Excessive memory usage
+
+**When to use**:
+- ✅ Production servers
+- ✅ Security-critical systems
+- ✅ Air-gapped environments
+- ❌ Dev/test systems (overkill)
+
+**Installation** (optional):
+```bash
+# Install script
+sudo install -m 755 scripts/linmon-watchdog.sh /usr/local/bin/linmon-watchdog.sh
+
+# Install systemd timer (runs every 5 minutes)
+sudo install -m 644 linmon-watchdog.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now linmon-watchdog.timer
+
+# Watch for alerts
+journalctl -u linmon-watchdog -f
+```
+
+**Manual check**:
+```bash
+sudo /usr/local/bin/linmon-watchdog.sh
+```
+
+**See**: [WATCHDOG.md](WATCHDOG.md) for full documentation.
+
+---
+
 **Example output**:
 ```
 Event Type Summary

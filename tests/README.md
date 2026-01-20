@@ -1,327 +1,173 @@
-# LinMon Test Scripts
+# LinMon Unit Tests
 
-This directory contains test scripts for LinMon v1.4.0 security detection features.
-
-## Overview
-
-LinMon v1.4.0 introduces three new security detection capabilities:
-
-1. **SSH Key Detection** (T1552.004, T1098.004) - Detects reads of SSH private keys and writes to authorized_keys
-2. **SUID/SGID Manipulation** (T1548.001) - Detects chmod operations that set SUID/SGID bits
-3. **Persistence Mechanisms** (T1053, T1547) - Detects writes to cron, systemd, shell profiles, init scripts, autostart
-
-These test scripts verify that each feature is working correctly.
-
-## Prerequisites
-
-### 1. LinMon Must Be Running
-
-```bash
-sudo systemctl status linmond
-```
-
-If not running:
-```bash
-sudo systemctl start linmond
-```
-
-### 2. Enable Detection Features
-
-Edit `/etc/linmon/linmon.conf` and enable the features you want to test:
-
-```ini
-# SSH key detection (enabled by default)
-monitor_cred_read = true
-
-# SUID/SGID manipulation detection
-monitor_suid = true
-
-# Persistence mechanism detection
-monitor_persistence = true
-```
-
-Reload configuration:
-```bash
-sudo systemctl reload linmond
-```
-
-### 3. Required Tools
-
-All test scripts require:
-- `jq` - JSON parsing
-- `systemctl` - Service management
-
-Install on Ubuntu/Debian:
-```bash
-sudo apt-get install jq
-```
-
-Install on RHEL/Rocky:
-```bash
-sudo dnf install jq
-```
+Comprehensive unit test suite for LinMon's critical components, covering security-sensitive functionality like credential redaction, buffer handling, and configuration validation.
 
 ## Running Tests
 
-### Run All Tests (Recommended)
+### Run All Tests
 
 ```bash
-# User-level tests only
-./run_all_tests.sh
-
-# All tests (requires root for SUID, cron, systemd tests)
-sudo ./run_all_tests.sh
+make test
 ```
 
-The master test runner will:
-- Check if LinMon is running
-- Run all three feature tests in sequence
-- Display pass/fail results for each test
-- Print a summary with troubleshooting steps if needed
+This will:
+1. Compile all test binaries
+2. Run each test suite in sequence
+3. Report results with colored output
+4. Exit with code 0 if all pass, 1 if any fail
 
 ### Run Individual Tests
 
-#### Test 1: SSH Key Detection
-
-Tests detection of:
-- SSH private key reads (`~/.ssh/id_rsa`, `id_ed25519`, `id_ecdsa`)
-- SSH authorized_keys writes (`~/.ssh/authorized_keys`)
-- SSH config reads (`~/.ssh/config`)
-
 ```bash
-./test_ssh_keys.sh
+# Filter tests (redaction, process/file filtering)
+./build/tests/test_filter
+
+# Logger tests (JSON escaping)
+./build/tests/test_logger
+
+# Config tests (parsing, validation, security checks)
+./build/tests/test_config
+
+# Procfs tests (buffer handling, edge cases)
+./build/tests/test_procfs
 ```
 
-**Expected events**: `security_cred_read` with `cred_file` values:
-- `ssh_private_key`
-- `ssh_authorized_keys`
-- `ssh_user_config`
+## Test Coverage
 
-#### Test 2: SUID/SGID Manipulation
+### test_filter.c (66 tests)
+Tests the event filtering and sensitive data redaction system.
 
-Tests detection of:
-- SUID bit setting (`chmod u+s`)
-- SGID bit setting (`chmod g+s`)
-- Both SUID and SGID (`chmod ug+s`)
+**Redaction Tests:**
+- Equals format: `password=secret` → `password=******`
+- Space-separated: `--password secret` → `--password ******`
+- Short options: `-psecret` → `-p******`
+- Quoted values: Handles `"value"` and `'value'`
+- Multiple occurrences in same command line
+- Edge cases: Empty values, special characters
+- All 20 sensitive patterns (password, token, api_key, etc.)
 
-```bash
-sudo ./test_suid.sh
+**Process Filtering Tests:**
+- Whitelist mode (only_processes)
+- Blacklist mode (ignore_processes)
+- Whitespace handling in config
+- NULL pointer safety
+
+**File Path Filtering Tests:**
+- Prefix matching (/proc, /sys, /dev)
+- Partial prefix edge cases
+- NULL and empty string handling
+
+### test_logger.c (47 tests)
+Tests JSON escaping for safe event logging.
+
+**Escape Tests:**
+- Special characters: `"`, `\`, `\b`, `\f`, `\n`, `\r`, `\t`
+- Control characters (< 0x20): Escaped as `\uXXXX`
+- Mixed content with multiple escape types
+- Real-world command lines (shell, Python, Windows paths)
+
+**Buffer Safety Tests:**
+- NULL pointer handling
+- Zero-size buffers
+- Small buffer truncation
+- Exact boundary conditions
+- Very large buffers (16KB)
+
+**Edge Cases:**
+- Empty strings
+- Only special characters
+- Double escaping
+- High-bit characters (UTF-8 pass-through)
+
+### test_config.c (86 tests)
+Tests configuration file parsing and validation.
+
+**Parsing Tests:**
+- Boolean values (true/false)
+- Integer ranges with validation
+- Size parsing with K/M/G suffixes
+- String lists (comma-separated)
+- Comments and empty lines
+- Malformed lines (skipped gracefully)
+
+**Validation Tests:**
+- Path security: Must be absolute, no `..`
+- UID range bounds checking
+- Verbosity limits (0-2)
+- Log rotation size/count limits
+- Cache size limits
+
+**Security Tests:**
+- World-writable config file rejected (-EPERM)
+- Non-root ownership warnings
+- Group-writable warnings
+
+**Feature Coverage:**
+- All monitoring options (processes, network, security)
+- Cache configuration
+- Security monitoring flags (14 MITRE ATT&CK techniques)
+
+### test_procfs.c (53 tests)
+Tests /proc filesystem reading with focus on buffer safety.
+
+**cmdline Tests:**
+- Reading current process (always exists)
+- Reading init (PID 1)
+- Non-existent PID handling
+- NULL buffer safety
+- Zero-size buffer
+- 1-byte and 2-byte edge cases (underflow guard)
+- Null-separated argument handling
+- Trailing space trimming
+- Concurrent reads (idempotency)
+
+**sudo_info Tests:**
+- NULL parameter safety
+- Non-existent PID
+- Buffer overflow protection
+- Zero-size buffer handling
+- Processes without SUDO_UID
+
+## Test Framework
+
+### Simple C Test Framework
+
+All tests use the lightweight framework in `tests/test_framework.h`:
+
+```c
+TEST_SUITE("Test Suite Name");
+TEST_CASE("Specific test case");
+
+// Assertions
+ASSERT_TRUE(expr);
+ASSERT_FALSE(expr);
+ASSERT_EQ(a, b);
+ASSERT_NEQ(a, b);
+ASSERT_STREQ(str1, str2);
+ASSERT_STRNEQ(str1, str2);
+ASSERT_NULL(ptr);
+ASSERT_NOT_NULL(ptr);
+
+print_test_summary();  // At end of main()
 ```
 
-**Requires root**: SUID/SGID operations require root privileges.
+**Features:**
+- Colored output (green ✓ / red ✗)
+- Automatic test counting
+- Pass/fail summary
+- No external dependencies
+- Exit code 0 (pass) or 1 (fail)
 
-**Expected events**: `security_suid` with fields:
-- `suid: true` (SUID bit set)
-- `sgid: true` (SGID bit set)
-- `mode` (full mode bits)
-- `path` (binary path)
+## Test Statistics
 
-#### Test 3: Persistence Mechanism Detection
+**Total**: 266 tests across 4 test suites
+- test_filter: 66 tests
+- test_logger: 47 tests
+- test_config: 86 tests
+- test_procfs: 53 tests
 
-Tests detection of:
-- Cron job creation (`/etc/cron.d/*`)
-- Systemd service creation (`/etc/systemd/system/*`)
-- Shell profile modification (`~/.bashrc`)
-- Autostart entry creation (`~/.config/autostart/*`)
+**Completion Status**: ✅ All tests passing
 
-```bash
-# User-level tests only (shell profile, autostart)
-./test_persistence.sh
+## Adding New Tests
 
-# All tests (requires root for cron, systemd)
-sudo ./test_persistence.sh
-```
-
-**Expected events**: `security_persistence` with `persistence_type` values:
-- `cron`
-- `systemd`
-- `shell_profile`
-- `autostart`
-
-## Verifying Results
-
-### Check Events in JSON Log
-
-View all security events from the last test run:
-
-```bash
-# SSH key events
-sudo tail -20 /var/log/linmon/events.json | jq 'select(.type == "security_cred_read" and (.cred_file | test("ssh")))'
-
-# SUID events
-sudo tail -20 /var/log/linmon/events.json | jq 'select(.type == "security_suid")'
-
-# Persistence events
-sudo tail -20 /var/log/linmon/events.json | jq 'select(.type == "security_persistence")'
-```
-
-### Expected Event Examples
-
-**SSH Private Key Read**:
-```json
-{
-  "timestamp": "2026-01-06T12:34:56.789Z",
-  "type": "security_cred_read",
-  "cred_file": "ssh_private_key",
-  "path": "/home/user/.ssh/id_rsa",
-  "uid": 1000,
-  "username": "user",
-  "comm": "cat"
-}
-```
-
-**SUID Manipulation**:
-```json
-{
-  "timestamp": "2026-01-06T12:34:56.789Z",
-  "type": "security_suid",
-  "path": "/tmp/linmon_test_suid",
-  "mode": 35309,
-  "suid": true,
-  "sgid": false,
-  "uid": 0,
-  "username": "root",
-  "comm": "chmod"
-}
-```
-
-**Persistence Detection**:
-```json
-{
-  "timestamp": "2026-01-06T12:34:56.789Z",
-  "type": "security_persistence",
-  "persistence_type": "cron",
-  "path": "/etc/cron.d/linmon_test",
-  "uid": 0,
-  "username": "root",
-  "comm": "bash",
-  "open_flags": 577
-}
-```
-
-## Troubleshooting
-
-### No Events Logged
-
-1. **Check LinMon is running**:
-   ```bash
-   sudo systemctl status linmond
-   ```
-
-2. **Check configuration**:
-   ```bash
-   grep -E "monitor_cred_read|monitor_suid|monitor_persistence" /etc/linmon/linmon.conf
-   ```
-
-3. **Reload configuration**:
-   ```bash
-   sudo systemctl reload linmond
-   ```
-
-4. **Check for errors**:
-   ```bash
-   sudo journalctl -u linmond -n 50
-   ```
-
-### Tests Fail with "Permission Denied"
-
-Some tests require root privileges:
-- `test_suid.sh` - SUID operations require root
-- `test_persistence.sh` - Cron and systemd tests require root
-
-Run with sudo:
-```bash
-sudo ./test_suid.sh
-sudo ./test_persistence.sh
-```
-
-### Events Logged But Not Detected by Test
-
-The test scripts look for events logged **after** the test starts. If you run tests multiple times quickly, old events may be present.
-
-Wait a few seconds between test runs or check manually:
-```bash
-sudo tail -100 /var/log/linmon/events.json | jq 'select(.type == "security_persistence")'
-```
-
-## Cleanup
-
-All test scripts clean up after themselves:
-
-- **SSH test**: Removes test SSH keys and authorized_keys entries
-- **SUID test**: Removes test binaries from `/tmp`
-- **Persistence test**: Removes cron jobs, systemd services, shell profile entries, autostart files
-
-If a test is interrupted (Ctrl+C), you may need to manually clean up:
-
-```bash
-# Remove test SSH key
-rm -f ~/.ssh/test_linmon_id_rsa*
-
-# Remove test binaries
-sudo rm -f /tmp/linmon_test_*
-
-# Remove test cron job
-sudo rm -f /etc/cron.d/linmon_test
-
-# Remove test systemd service
-sudo rm -f /etc/systemd/system/linmon-test.service
-sudo systemctl daemon-reload
-
-# Remove test entries from .bashrc
-sed -i '/LinMon test/d' ~/.bashrc
-sed -i '/LINMON_TEST/d' ~/.bashrc
-
-# Remove test autostart entry
-rm -f ~/.config/autostart/linmon-test.desktop
-```
-
-## Integration with CI/CD
-
-These test scripts can be integrated into CI/CD pipelines:
-
-```bash
-#!/bin/bash
-# Example CI test script
-
-# Start LinMon
-sudo systemctl start linmond
-sleep 2
-
-# Enable all features
-sudo sed -i 's/^monitor_cred_read =.*/monitor_cred_read = true/' /etc/linmon/linmon.conf
-sudo sed -i 's/^monitor_suid =.*/monitor_suid = true/' /etc/linmon/linmon.conf
-sudo sed -i 's/^monitor_persistence =.*/monitor_persistence = true/' /etc/linmon/linmon.conf
-sudo systemctl reload linmond
-sleep 2
-
-# Run tests
-cd tests/
-sudo ./run_all_tests.sh
-
-# Check exit code
-if [ $? -eq 0 ]; then
-    echo "All LinMon v1.4.0 tests passed"
-    exit 0
-else
-    echo "LinMon v1.4.0 tests failed"
-    exit 1
-fi
-```
-
-## Security Note
-
-These tests intentionally trigger security detections. When run on production systems:
-
-1. **Review test artifacts** - Ensure all test files are cleaned up
-2. **Inform security team** - Test activity may trigger SIEM alerts
-3. **Test in staging first** - Validate tests work before production deployment
-
-## Support
-
-If tests fail or you encounter issues:
-
-1. Check [MONITORING.md](../MONITORING.md) for event format examples
-2. Check [SECURITY.md](../SECURITY.md) for MITRE ATT&CK coverage details
-3. Check [CHANGELOG.md](../CHANGELOG.md) for v1.4.0 feature documentation
-4. Open an issue at: https://github.com/espegro/linmon/issues
+See the full README for detailed instructions on adding new tests, test guidelines, CI/CD integration, and debugging tips.

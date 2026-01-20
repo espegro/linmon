@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# LinMon Watchdog Service - One-shot health check
+
+[Unit]
+Description=LinMon Health Check
+After=linmond.service
+Requires=linmond.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/linmon-watchdog.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=linmon-watchdog
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/
+ReadWritePaths=/var/log
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
