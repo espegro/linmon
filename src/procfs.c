@@ -46,10 +46,13 @@ bool procfs_read_cmdline(pid_t pid, char *buf, size_t max_len)
     buf[bytes_read] = '\0';
 
     // Replace null bytes with spaces (cmdline args are null-separated)
-    // Only process if we have more than 1 byte
-    for (i = 0; i < bytes_read - 1; i++) {
-        if (buf[i] == '\0')
-            buf[i] = ' ';
+    // Guard against underflow: only process if we have at least 2 bytes
+    // (bytes_read - 1 would underflow to large value if bytes_read == 0)
+    if (bytes_read > 1) {
+        for (i = 0; i < bytes_read - 1; i++) {
+            if (buf[i] == '\0')
+                buf[i] = ' ';
+        }
     }
 
     // Trim trailing spaces/nulls

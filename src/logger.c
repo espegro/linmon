@@ -528,13 +528,19 @@ int logger_log_process_event(const struct process_event *event)
 
     pthread_mutex_lock(&log_mutex);
 
-    fprintf(log_fp,
+    // Write JSON header - critical section, check for errors to avoid truncated events
+    int ret = fprintf(log_fp,
             "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
             "\"sid\":%u,\"pgid\":%u,"
             "\"uid\":%u",
             seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid,
             event->uid);
+
+    if (!check_fprintf_result(ret)) {
+        pthread_mutex_unlock(&log_mutex);
+        return -EIO;  // Critical failure, abort event logging
+    }
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -634,7 +640,7 @@ int logger_log_process_event(const struct process_event *event)
     // Log container info (sparse - only if in container)
     log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
-    int ret = fprintf(log_fp, "}\n");
+    ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -665,6 +671,7 @@ int logger_log_file_event(const struct file_event *event)
     char username[USERNAME_MAX];
     char username_escaped[USERNAME_MAX * 6];
     const char *event_type;
+    int ret;
 
     if (!log_fp)
         return -EINVAL;
@@ -705,11 +712,17 @@ int logger_log_file_event(const struct file_event *event)
 
     pthread_mutex_lock(&log_mutex);
 
-    fprintf(log_fp,
+    // Write JSON header - critical section, check for errors to avoid truncated events
+    ret = fprintf(log_fp,
             "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
             "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
             seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid, event->uid);
+
+    if (!check_fprintf_result(ret)) {
+        pthread_mutex_unlock(&log_mutex);
+        return -EIO;  // Critical failure, abort event logging
+    }
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -742,7 +755,7 @@ int logger_log_file_event(const struct file_event *event)
     // Log container info (sparse - only if in container)
     log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
-    int ret = fprintf(log_fp, "}\n");
+    ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -769,6 +782,7 @@ int logger_log_network_event(const struct network_event *event)
     char saddr_str[INET6_ADDRSTRLEN];
     char daddr_str[INET6_ADDRSTRLEN];
     const char *event_type;
+    int ret;
 
     if (!log_fp)
         return -EINVAL;
@@ -832,11 +846,17 @@ int logger_log_network_event(const struct network_event *event)
 
     pthread_mutex_lock(&log_mutex);
 
-    fprintf(log_fp,
+    // Write JSON header - critical section, check for errors to avoid truncated events
+    ret = fprintf(log_fp,
             "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
             "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
             seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid, event->uid);
+
+    if (!check_fprintf_result(ret)) {
+        pthread_mutex_unlock(&log_mutex);
+        return -EIO;  // Critical failure, abort event logging
+    }
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -882,7 +902,7 @@ int logger_log_network_event(const struct network_event *event)
     // Log container info (sparse - only if in container)
     log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
-    int ret = fprintf(log_fp, "}\n");
+    ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -910,6 +930,7 @@ int logger_log_privilege_event(const struct privilege_event *event)
     char old_username_escaped[USERNAME_MAX * 6];
     char new_username_escaped[USERNAME_MAX * 6];
     const char *event_type;
+    int ret;
 
     if (!log_fp)
         return -EINVAL;
@@ -1007,7 +1028,7 @@ int logger_log_privilege_event(const struct privilege_event *event)
     // Log container info (sparse - only if in container)
     log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
-    int ret = fprintf(log_fp, "}\n");
+    ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -1039,6 +1060,7 @@ int logger_log_security_event(const struct security_event *event)
     char username[USERNAME_MAX];
     char username_escaped[USERNAME_MAX * 6];
     const char *event_type;
+    int ret;
 
     if (!log_fp)
         return -EINVAL;
@@ -1105,11 +1127,17 @@ int logger_log_security_event(const struct security_event *event)
 
     pthread_mutex_lock(&log_mutex);
 
-    fprintf(log_fp,
+    // Write JSON header - critical section, check for errors to avoid truncated events
+    ret = fprintf(log_fp,
             "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
             "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
             seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid, event->uid);
+
+    if (!check_fprintf_result(ret)) {
+        pthread_mutex_unlock(&log_mutex);
+        return -EIO;  // Critical failure, abort event logging
+    }
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"username\":\"%s\"", username_escaped);
@@ -1257,7 +1285,7 @@ int logger_log_security_event(const struct security_event *event)
     // Log container info (sparse - only if in container)
     log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
-    int ret = fprintf(log_fp, "}\n");
+    ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -1290,6 +1318,7 @@ int logger_log_persistence_event(const struct persistence_event *event)
     char path_escaped[MAX_FILENAME_LEN * 6];
     char username[USERNAME_MAX];
     char username_escaped[USERNAME_MAX * 6];
+    int ret;
 
     if (!log_fp)
         return -EINVAL;
@@ -1334,13 +1363,20 @@ int logger_log_persistence_event(const struct persistence_event *event)
 
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
     fprintf(log_fp, ",\"path\":\"%s\"", path_escaped);
-    fprintf(log_fp, ",\"persistence_type\":\"%s\"", persistence_names[event->persistence_type]);
+
+    // Bounds check: persistence_type comes from eBPF and must be validated
+    // Array has 6 elements (indices 0-5), anything else is malformed data
+    const char *persistence_type_str = "unknown";
+    if (event->persistence_type > 0 && event->persistence_type <= 5) {
+        persistence_type_str = persistence_names[event->persistence_type];
+    }
+    fprintf(log_fp, ",\"persistence_type\":\"%s\"", persistence_type_str);
     fprintf(log_fp, ",\"open_flags\":%u", event->flags);
 
     // Log container info (sparse - only if in container)
     log_container_info(event->pid, event->pid_ns, event->mnt_ns, event->net_ns);
 
-    int ret = fprintf(log_fp, "}\n");
+    ret = fprintf(log_fp, "}\n");
 
     pthread_mutex_unlock(&log_mutex);
 
@@ -1351,7 +1387,7 @@ int logger_log_persistence_event(const struct persistence_event *event)
     if (enable_syslog) {
         syslog(LOG_WARNING, "security_persistence: pid=%u uid=%u comm=%s path=%s type=%s",
                event->pid, event->uid, event->comm, event->path,
-               persistence_names[event->persistence_type]);
+               persistence_type_str);
     }
 
     return 0;

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-01-20
+
+### Fixed
+
+#### Critical Security Fixes - Memory Safety and Error Handling
+
+- **Fixed array bounds vulnerability in persistence event logging** (`src/logger.c`)
+  - `logger_log_persistence_event()` now validates `persistence_type` before array access
+  - **Issue**: `persistence_type` from eBPF was used directly as array index without bounds checking
+  - **Impact**: Out-of-bounds read could cause memory disclosure, crashes, or potential code execution
+  - **Fix**: Added bounds check (0-5 range validation) with fallback to "unknown" for invalid values
+  - **Severity**: CRITICAL - Prevents undefined behavior from malformed eBPF data
+
+- **Fixed integer underflow in cmdline parsing** (`src/procfs.c`)
+  - `procfs_read_cmdline()` now guards against underflow when `bytes_read` is 0
+  - **Issue**: Expression `bytes_read - 1` could underflow to large value, causing buffer over-read
+  - **Impact**: Potential crash or memory corruption on empty `/proc/<pid>/cmdline` files
+  - **Fix**: Added explicit check `if (bytes_read > 1)` before loop
+  - **Severity**: HIGH - Prevents crash on edge-case process states
+
+- **Improved fprintf error handling in all logger functions**
+  - All `logger_log_*()` functions now check critical fprintf() calls
+  - **Issue**: Initial JSON header write failures went undetected, causing corrupted events
+  - **Impact**: Silent data loss on disk full or I/O errors, breaks JSON parsing
+  - **Fix**: Added error checking on JSON header fprintf with early return on failure
+  - **Functions affected**: `logger_log_process_event()`, `logger_log_file_event()`,
+    `logger_log_network_event()`, `logger_log_privilege_event()`,
+    `logger_log_security_event()`, `logger_log_persistence_event()`
+  - **Severity**: MEDIUM - Prevents corrupted JSON in log files
+
+**Security Audit**: Comprehensive code review identified memory safety issues in event logging path
+
+**Upgrade recommendation**: **CRITICAL for all users** - Fixes prevent potential crashes and memory corruption
+
 ## [1.6.2] - 2026-01-10
 
 ### Fixed
