@@ -25,6 +25,9 @@ linmond
 test-filters.conf
 startup
 
+# Analysis reports
+report.json
+
 # Claude Code
 .claude/
 
