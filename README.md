@@ -135,9 +135,9 @@ For detailed installation instructions including RHEL/Rocky setup, manual instal
 
 ### Runtime Requirements (Deployed Binary)
 - Linux kernel >= 5.8 (with BTF support)
-  - Ubuntu 24.04: ✅ kernel 6.8+
-  - RHEL 9: ✅ kernel 5.14+
-  - RHEL 10: ✅ kernel 6.x+
+  - Ubuntu 24.04: ✅ kernel 6.8+ (tested)
+  - RHEL 9 / Rocky 9: ✅ kernel 5.14+ (tested - minor SELinux limitations)
+  - RHEL 10 / Rocky 10: ✅ kernel 6.12+ (tested - full support)
 - **No external packages required** - LinMon works standalone after installation
 
 ### Build Dependencies (Compile from Source)
