@@ -38,6 +38,73 @@ sudo ./scripts/linmon-report.sh --event process_exec --limit 20 --reverse
 
 ---
 
+### `linmon-monitor.py`
+
+**Purpose**: Real-time monitoring dashboard for LinMon activity (like htop for security events).
+
+**What it shows**:
+1. Live event stream with color-coded event types
+2. Events per second (1s, 5s, 60s averages)
+3. Event type breakdown (process, network, security, file, privilege)
+4. Top processes and users by activity
+5. Interactive filtering by event type or username
+
+**Usage**:
+```bash
+# Monitor default log file (requires read access)
+./scripts/linmon-monitor.py
+
+# Monitor custom log file
+./scripts/linmon-monitor.py /path/to/events.json
+
+# Grant read access to log (one-time setup)
+sudo chmod +r /var/log/linmon/events.json
+# OR add user to log group (Ubuntu/RHEL)
+sudo usermod -aG adm $USER  # Ubuntu
+sudo usermod -aG systemd-journal $USER  # RHEL
+```
+
+**Keyboard shortcuts**:
+- `q` - Quit
+- `Space` - Pause/resume event stream
+- `p` / `n` / `s` / `f` / `v` - Filter by Process/Network/Security/File/priVilege events
+- `Esc` - Clear all filters
+- `r` - Reset statistics counters
+
+**Requirements**:
+- Python 3.8+ (built-in on Ubuntu 24.04 / RHEL 9+)
+- `python3-rich` installed (`sudo apt-get install python3-rich`)
+- Read access to `/var/log/linmon/events.json`
+
+**Features**:
+- Loads last 1000 events on startup for immediate context
+- Automatic log rotation detection
+- Color-coded events (security events in red, network in cyan, etc.)
+- Live statistics with minimal overhead
+- Works over SSH (uses curses, not GUI)
+
+**Example output**:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Events/sec: 12.4 (1s) | 8.2 (5s) | 15.6 (60s)                   │
+│ Process  : ████░░░░░░ 45%  Network: ██░░░░░░░░ 20%              │
+│ Security : █░░░░░░░░░ 10%  File   : █░░░░░░░░░  8%              │
+│ Privilege: █░░░░░░░░░  5%                                        │
+│ Top: bash(142) vim(89) ssh(34)  |  Users: alice(201) bob(64)   │
+├─────────────────────────────────────────────────────────────────┤
+│ Event Stream                                                     │
+│ Time     Type        User        Process     Details             │
+│ 19:42:15 EXEC        alice       bash        /bin/bash           │
+│ 19:42:16 TCP_CONN    bob         ssh         192.168.1.10:22    │
+│ 19:42:17 PTRACE      alice       gdb         target_pid=1234    │
+├─────────────────────────────────────────────────────────────────┤
+│ Filters: [Security Events] | q:Quit Space:Pause p:Proc n:Net   │
+│ LinMon: Running | Log: /var/log/linmon/events.json              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ### `linmon-watchdog.sh` (Optional)
 
 **Purpose**: Health monitoring for LinMon daemon - detects failures systemd restart alone cannot catch.
@@ -265,7 +332,10 @@ lsmod | grep lkrg
 # Run AIDE integrity check
 sudo aide --check
 
-# Review LinMon activity (new!)
+# Monitor LinMon in real-time (new!)
+./scripts/linmon-monitor.py  # Interactive dashboard
+
+# Review LinMon activity reports
 sudo ./scripts/linmon-report.sh --time 1440  # Last 24 hours
 sudo ./scripts/linmon-report.sh --security-only  # Security events only
 
