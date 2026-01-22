@@ -61,6 +61,10 @@ uint64_t logger_get_sequence(void);
 // Get total event count (for tamper detection)
 unsigned long logger_get_event_count(void);
 
+// Check if log file has been deleted and recover (T1070.001 detection)
+// Returns: true if file was deleted and recovered, false otherwise
+bool logger_check_file_deleted(void);
+
 // Cleanup logger
 void logger_cleanup(void);
 

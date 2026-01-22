@@ -1281,6 +1281,10 @@ int main(int argc, char **argv)
     time_t last_checkpoint = time(NULL);
     int checkpoint_interval = global_config.checkpoint_interval * 60;  // Convert to seconds
 
+    // Periodic log file deletion check (T1070.001 detection)
+    time_t last_logfile_check = time(NULL);
+    const int logfile_check_interval = 10;  // Check every 10 seconds
+
     // Main event loop - poll for events
     while (!exiting) {
         // Check for config reload
@@ -1408,6 +1412,19 @@ int main(int argc, char **argv)
             if (now - last_checkpoint >= checkpoint_interval) {
                 log_checkpoint_to_syslog();
                 last_checkpoint = now;
+            }
+        }
+
+        // Periodic log file deletion check (T1070.001 - Indicator Removal)
+        {
+            time_t now = time(NULL);
+            if (now - last_logfile_check >= logfile_check_interval) {
+                if (logger_check_file_deleted()) {
+                    // Log file was deleted and recovered
+                    // Critical alert already sent to syslog by logger_check_file_deleted()
+                    fprintf(stderr, "WARNING: Log file was deleted - recovered with new file\n");
+                }
+                last_logfile_check = now;
             }
         }
     }

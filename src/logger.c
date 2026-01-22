@@ -1421,6 +1421,103 @@ unsigned long logger_get_event_count(void)
     return count;
 }
 
+bool logger_check_file_deleted(void)
+{
+    struct stat st;
+    uint64_t last_seq;
+    unsigned long lost_events;
+    char timestamp[64];
+    struct timespec ts;
+    struct tm tm_info;
+
+    pthread_mutex_lock(&log_mutex);
+
+    // Check if current log file has been deleted
+    if (!log_fp || fstat(fileno(log_fp), &st) != 0) {
+        pthread_mutex_unlock(&log_mutex);
+        return false;
+    }
+
+    // st_nlink == 0 means file is deleted from filesystem but still open
+    if (st.st_nlink > 0) {
+        pthread_mutex_unlock(&log_mutex);
+        return false;  // File still exists, all good
+    }
+
+    // CRITICAL: Log file has been deleted (T1070.001 - Indicator Removal)
+
+    // Save current sequence number and event count before recovery
+    pthread_mutex_lock(&seq_mutex);
+    last_seq = event_sequence;
+    lost_events = event_count;
+    pthread_mutex_unlock(&seq_mutex);
+
+    pthread_mutex_unlock(&log_mutex);
+
+    // Log to syslog (cannot be deleted, goes to journald)
+    syslog(LOG_CRIT, "SECURITY ALERT: Log file deleted (T1070.001) - "
+                     "last_seq=%lu events_lost=%lu - reopening new file",
+           last_seq, lost_events);
+
+    // Try to reopen log file
+    const char *log_path = (rotation_base_path[0] != '\0') ? rotation_base_path : "/var/log/linmon/events.json";
+    mode_t old_umask = umask(0027);  // rw-r----- permissions
+    FILE *new_fp = fopen(log_path, "a");
+    umask(old_umask);
+
+    if (!new_fp) {
+        syslog(LOG_CRIT, "CRITICAL: Failed to reopen log after deletion: %s",
+               strerror(errno));
+        return true;  // File was deleted, but recovery failed
+    }
+
+    setlinebuf(new_fp);
+
+    // Replace old file pointer atomically
+    logger_replace(new_fp);
+
+    // Format timestamp
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tm_info);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm_info);
+    snprintf(timestamp + strlen(timestamp), sizeof(timestamp) - strlen(timestamp),
+             ".%03ldZ", ts.tv_nsec / 1000000);
+
+    // Log recovery event to NEW file with gap information
+    // This creates forensic trail even though original file is gone
+    pthread_mutex_lock(&log_mutex);
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t recovery_seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+
+    fprintf(log_fp,
+            "{\"seq\":%lu,"
+            "\"timestamp\":\"%s\","
+            "\"hostname\":\"%s\","
+            "\"type\":\"log_tamper_recovery\","
+            "\"severity\":\"CRITICAL\","
+            "\"attack_technique\":\"T1070.001\","
+            "\"attack_name\":\"Indicator Removal: Clear Linux Logs\","
+            "\"message\":\"Log file was deleted - sequence gap detected\","
+            "\"last_seq_before_deletion\":%lu,"
+            "\"events_lost\":%lu,"
+            "\"recovery_seq\":%lu,"
+            "\"seq_gap\":%lu}\n",
+            recovery_seq,
+            timestamp,
+            hostname,
+            last_seq,
+            lost_events,
+            recovery_seq,
+            recovery_seq - last_seq);
+
+    fflush(log_fp);
+    pthread_mutex_unlock(&log_mutex);
+
+    return true;  // File was deleted and recovered
+}
+
 void logger_cleanup(void)
 {
     if (log_fp) {
