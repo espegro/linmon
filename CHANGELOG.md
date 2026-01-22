@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-01-22
+
+### Added
+
+#### Own Log File Deletion Detection (T1070.001 - Indicator Removal)
+- **Detects when LinMon's own log file is deleted** to identify anti-forensics attacks attempting to erase audit trails
+- **Detection mechanism**:
+  - Periodic check using `fstat()` to detect deleted-but-open files (`st_nlink == 0`)
+  - 10-second detection interval in main event loop
+  - Runs continuously during normal operation with negligible overhead
+- **Recovery process**:
+  - Dual logging: Critical alert to syslog/journald (cannot be easily deleted)
+  - Automatic reopening of new log file
+  - Atomic file pointer replacement to avoid race conditions
+  - Recovery event written to new file with forensic gap tracking
+- **Forensic tracking**:
+  - `last_seq_before_deletion`: Last sequence number in deleted file
+  - `events_lost`: Total event count that was lost
+  - `seq_gap`: Sequence number gap for SIEM analysis
+  - Enables precise quantification of data loss
+- **Event type**: `log_tamper_recovery`
+- **Event fields**: `last_seq_before_deletion`, `events_lost`, `recovery_seq`, `seq_gap`, `attack_technique` (T1070.001)
+- **Security impact**:
+  - Raises the bar for attackers attempting log deletion
+  - Provides defense-in-depth with syslog backup logging
+  - Enables SIEM detection of log tampering attempts
+  - Documents exact data loss in forensic trail
+- **Thread safety**: Proper mutex ordering prevents deadlocks, atomic operations prevent race conditions
+- **Performance**: Single `fstat()` syscall every 10 seconds (negligible overhead)
+
+**Example recovery event**:
+```json
+{
+  "seq": 1042,
+  "timestamp": "2026-01-22T15:30:45.123Z",
+  "hostname": "server01",
+  "type": "log_tamper_recovery",
+  "severity": "CRITICAL",
+  "attack_technique": "T1070.001",
+  "attack_name": "Indicator Removal: Clear Linux Logs",
+  "message": "Log file was deleted - sequence gap detected",
+  "last_seq_before_deletion": 1035,
+  "events_lost": 1035,
+  "recovery_seq": 1042,
+  "seq_gap": 7
+}
+```
+
+**Use cases**:
+- Attacker deletes `/var/log/linmon/events.json` to hide traces
+- Ransomware anti-forensics phase (erase evidence before encryption)
+- Insider threat cleanup attempts
+- Accidental deletion detection (alerts on operational issues)
+
+**Related detections**: LinMon already monitors deletion of OTHER log files in `/var/log/*` (T1070.001), this extends protection to LinMon's own audit trail.
+
+**Upgrade recommendation**: Recommended for all production deployments. Significantly improves resilience against anti-forensics attacks.
+
 ## [1.6.3] - 2026-01-20
 
 ### Fixed
