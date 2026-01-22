@@ -247,6 +247,26 @@ capture_container_metadata = true
 # Recommendation: 15-60 minutes depending on security requirements
 checkpoint_interval = 30
 
+# Authentication file integrity monitoring (T1556.003/004)
+# Periodically verifies integrity of critical authentication files:
+#   Binaries: /usr/sbin/sshd, /usr/bin/sudo, /bin/login, /usr/local/sbin/linmond
+#   PAM configs: /etc/pam.d/sshd, /etc/pam.d/sudo, /etc/pam.d/common-auth
+#   SSH config: /etc/ssh/sshd_config
+#   Sudo config: /etc/sudoers
+# Validates files against package manager database (dpkg/rpm)
+# Logs violations when files are modified or not from packages
+# Requires: verify_packages = true for full validation
+# Default: true (enabled)
+monitor_auth_integrity = true
+
+# Authentication integrity check interval (minutes)
+# How often to verify critical authentication files
+# Range: 0-1440 minutes (0 = disabled, max 24 hours)
+# Default: 30 (check every 30 minutes)
+# Recommendation: 15-60 minutes for production systems
+# Note: Lower intervals increase overhead (SHA256 hash of 9 files)
+auth_integrity_interval = 30
+
 # ============================================================================
 # EXAMPLE CONFIGURATIONS
 # ============================================================================

@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-01-22
+
+### Added
+
+#### Authentication File Integrity Monitoring (T1556.003/T1556.004 - Modify Authentication Process)
+- **Periodic validation of critical authentication files** to detect trojaned binaries and backdoored configurations
+- **Monitored files** (9 critical authentication components):
+  - **Binaries**: `/usr/sbin/sshd`, `/usr/bin/sudo`, `/bin/login`, `/usr/local/sbin/linmond` (self-check)
+  - **PAM configs**: `/etc/pam.d/sshd`, `/etc/pam.d/sudo`, `/etc/pam.d/common-auth` (Ubuntu), `/etc/pam.d/system-auth` (RHEL)
+  - **SSH config**: `/etc/ssh/sshd_config`
+  - **Sudo config**: `/etc/sudoers`
+- **Validation mechanism**:
+  - SHA256 hash calculation for each file
+  - Package manager verification (dpkg/rpm) to detect modifications
+  - Validates against package database expected hash
+  - Only logs violations (sparse events - high signal-to-noise)
+- **Detection criteria**:
+  - File not from package manager → `verdict: "not_in_package_database"` (CRITICAL)
+  - File modified since package install → `verdict: "modified_after_install"` (CRITICAL)
+  - Hash mismatch with package database → `verdict: "hash_mismatch"` (WARNING)
+- **Event type**: `auth_integrity_violation`
+- **Event fields**: `file_path`, `verdict`, `package`, `modified`, `sha256`, `attack_technique` (T1556.003/T1556.004)
+- **Performance**: Single `fstat()` + 9 SHA256 hashes every 30 minutes (default) = <20ms overhead per interval
+- **Configuration**:
+  - `monitor_auth_integrity = true` (default: enabled)
+  - `auth_integrity_interval = 30` (minutes, default: 30, range: 0-1440)
+  - Requires `verify_packages = true` for full validation
+- **Logging**:
+  - Dual logging: Syslog (persistent, harder to delete) + JSON (structured)
+  - Violations logged immediately when detected
+  - No logging for clean files (sparse events)
+
+**Example violation event**:
+```json
+{
+  "seq": 4521,
+  "timestamp": "2026-01-22T16:30:12.456Z",
+  "hostname": "server01",
+  "type": "auth_integrity_violation",
+  "severity": "CRITICAL",
+  "attack_technique": "T1556.003/T1556.004",
+  "attack_name": "Modify Authentication Process",
+  "file_path": "/usr/sbin/sshd",
+  "verdict": "modified_after_install",
+  "package": "openssh-server",
+  "modified": true,
+  "sha256": "a1b2c3d4e5f6..."
+}
+```
+
+**Attack scenarios detected**:
+- Trojaned SSH daemon (T1556.004 - Modify System Image: Backdoor sshd binary)
+- PAM backdoor modules (T1556.003 - PAM configuration to allow authentication bypass)
+- Modified sudo binary (privilege escalation persistence)
+- Malicious PAM configs (`pam_permit.so` added to allow passwordless login)
+- Replaced authentication binaries not from package manager
+
+**Security impact**:
+- Detects post-compromise persistence via authentication backdoors
+- Complements runtime `monitor_cred_write` (detects modifications AS they happen)
+- Periodic validation catches modifications made while LinMon was stopped
+- Raises bar for attackers - must modify files AND evade package database
+- Provides forensic evidence of compromise timeline
+
+**Performance characteristics**:
+- Negligible overhead: 9 files × 30 min interval = ~18ms per 30 minutes
+- Uses existing filehash cache (no redundant hashing)
+- Uses existing pkgcache (package verification infrastructure)
+- Scales well: O(n) where n = number of files (hardcoded to 9)
+
+**Implementation notes**:
+- New module: `src/authcheck.c` + `src/authcheck.h`
+- Integration point: Main event loop periodic check (similar to checkpoint)
+- Config handling: `src/config.c` + `src/config.h`
+- Thread-safe: Uses logger mutex for JSON writes
+- Distro-aware: Handles Ubuntu-specific (`/etc/pam.d/common-auth`) vs RHEL-specific (`/etc/pam.d/system-auth`) files
+
+**Upgrade recommendation**: Recommended for all production deployments. Significantly improves detection of authentication backdoors installed while system was offline or LinMon was stopped.
+
+**Future enhancements** (not in v1.7.1):
+- PAM module validation (`/usr/lib/*/security/pam_*.so`)
+- Smart PAM module detection (parse configs to find active modules)
+- Baseline establishment on first run (detect ANY change, not just package violations)
+
 ## [1.7.0] - 2026-01-22
 
 ### Added

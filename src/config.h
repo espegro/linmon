@@ -52,6 +52,10 @@ struct linmon_config {
     // Tamper detection
     int checkpoint_interval;  // Minutes between integrity checkpoints (default: 30, 0=disabled)
 
+    // Authentication integrity monitoring
+    bool monitor_auth_integrity;  // Periodic check of critical auth files (default: true)
+    int auth_integrity_interval;  // Minutes between auth integrity checks (default: 30, 0=disabled)
+
     // Process filtering
     char *ignore_processes;   // Comma-separated blacklist
     char *only_processes;     // Comma-separated whitelist

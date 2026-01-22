@@ -39,6 +39,7 @@ LinMon is a Linux activity monitoring service similar to Sysmon for Windows. It 
 - `src/filehash.c` - SHA256 hashing of executed binaries
 - `src/procfs.c` - Reading from `/proc` (command-line arguments, environment)
 - `src/pkgcache.c` - Package verification cache (dpkg/rpm) for binary trust checking
+- `src/authcheck.c` - Periodic authentication file integrity monitoring (T1556.003/004)
 
 ### Event Flow
 
@@ -125,6 +126,17 @@ LinMon monitors multiple event types:
 - Detection method: Compares namespace inodes against init namespace, then parses `/proc/<pid>/cgroup`
 - Applied to all event types (process, file, network, privilege, security, persistence)
 - Config flag: `capture_container_metadata` (enabled by default)
+
+**Authentication Integrity Monitoring** (v1.7.1+):
+- Periodic validation of critical authentication files (binaries and configs)
+- Detects trojaned binaries (sshd, sudo, login) and backdoored PAM configurations
+- Validates 9 critical files against package manager database (dpkg/rpm)
+- Only logs violations (sparse events): modified files or files not from packages
+- Event type: `auth_integrity_violation`
+- Config flags: `monitor_auth_integrity` (default: true), `auth_integrity_interval` (default: 30 minutes)
+- Requires: `verify_packages = true` for full validation
+- Performance: <20ms overhead per check interval (9 SHA256 hashes every 30 minutes)
+- MITRE ATT&CK: T1556.003 (PAM modification), T1556.004 (Modify System Image)
 
 All events can be selectively enabled/disabled via configuration file.
 

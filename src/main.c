@@ -26,6 +26,7 @@
 #include "filehash.h"
 #include "pkgcache.h"
 #include "procfs.h"
+#include "authcheck.h"
 #include "linmon.skel.h"
 #include "../bpf/common.h"
 #include <arpa/inet.h>
@@ -972,6 +973,11 @@ int main(int argc, char **argv)
                       global_config.pkg_cache_size);
     }
 
+    // Initialize authentication integrity monitoring
+    if (global_config.monitor_auth_integrity) {
+        authcheck_init(global_config.verify_packages);
+    }
+
     // Configure logger enrichment options
     logger_set_enrichment(global_config.resolve_usernames,
                          global_config.hash_binaries,
@@ -1285,6 +1291,10 @@ int main(int argc, char **argv)
     time_t last_logfile_check = time(NULL);
     const int logfile_check_interval = 10;  // Check every 10 seconds
 
+    // Periodic authentication integrity check (T1556.003/004 detection)
+    time_t last_auth_check = time(NULL);
+    int auth_check_interval = global_config.auth_integrity_interval * 60;  // Convert to seconds
+
     // Main event loop - poll for events
     while (!exiting) {
         // Check for config reload
@@ -1376,6 +1386,9 @@ int main(int argc, char **argv)
             // Update checkpoint interval
             checkpoint_interval = global_config.checkpoint_interval * 60;
 
+            // Update auth integrity check interval
+            auth_check_interval = global_config.auth_integrity_interval * 60;
+
             // Update stored config hash after successful reload
             strncpy(config_sha256, new_config_sha256, sizeof(config_sha256));
             config_sha256[sizeof(config_sha256) - 1] = '\0';
@@ -1425,6 +1438,21 @@ int main(int argc, char **argv)
                     fprintf(stderr, "WARNING: Log file was deleted - recovered with new file\n");
                 }
                 last_logfile_check = now;
+            }
+        }
+
+        // Periodic authentication integrity check (T1556.003/004 - Modify Authentication)
+        if (global_config.monitor_auth_integrity && auth_check_interval > 0) {
+            time_t now = time(NULL);
+            if (now - last_auth_check >= auth_check_interval) {
+                int violations = authcheck_verify_all();
+                if (violations > 0) {
+                    // Violations detected and logged
+                    // Critical alerts already sent to syslog by authcheck_verify_all()
+                    fprintf(stderr, "WARNING: %d authentication file integrity violation(s) detected\n",
+                            violations);
+                }
+                last_auth_check = now;
             }
         }
     }

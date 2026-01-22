@@ -48,6 +48,10 @@ static void set_defaults(struct linmon_config *config)
     config->cache_save_interval = 5;   // Default: save every 5 minutes
     config->checkpoint_interval = 30;  // Default: checkpoint every 30 minutes
 
+    // Authentication integrity monitoring
+    config->monitor_auth_integrity = true;   // Default: enabled
+    config->auth_integrity_interval = 30;    // Default: check every 30 minutes
+
     config->ignore_processes = NULL;
     config->only_processes = NULL;
     config->ignore_networks = NULL;
@@ -280,6 +284,16 @@ int load_config(struct linmon_config *config, const char *config_file)
                 continue;
             }
             config->checkpoint_interval = (int)val;
+        } else if (strcmp(key, "monitor_auth_integrity") == 0) {
+            config->monitor_auth_integrity = (strcmp(value, "true") == 0);
+        } else if (strcmp(key, "auth_integrity_interval") == 0) {
+            char *endptr;
+            long val = strtol(value, &endptr, 10);
+            if (*endptr != '\0' || val < 0 || val > 1440) {  // 0 to 1440 minutes (24 hours)
+                fprintf(stderr, "Invalid auth_integrity_interval (0-1440 minutes): %s\n", value);
+                continue;
+            }
+            config->auth_integrity_interval = (int)val;
         } else if (strcmp(key, "ignore_processes") == 0) {
             if (strlen(value) > 0) {
                 config->ignore_processes = strdup(value);
