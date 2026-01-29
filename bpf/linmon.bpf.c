@@ -698,6 +698,7 @@ static __always_inline int handle_unlinkat_common(const char *filename)
     }
 
 regular_file_delete:
+    ;  // Empty statement required after label (C99/C11)
     // Regular file deletion (not a log file, or whitelisted log manager)
     struct file_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event)

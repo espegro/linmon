@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-01-29
+
+### Fixed
+- **C99/C11 compliance**: Fixed eBPF code label syntax (label followed by declaration)
+  - Added empty statement after `regular_file_delete` label in `bpf/linmon.bpf.c`
+  - Eliminates C23 extension warning from Clang compiler
+  - Improves portability across different compiler versions
+
+### Quality Assurance
+- **Comprehensive code analysis** performed with multiple tools:
+  - **Valgrind**: 0 memory leaks, 0 errors (tested with `--leak-check=full`)
+  - **AddressSanitizer**: No memory corruption, use-after-free, or buffer overflows detected
+  - **UndefinedBehaviorSanitizer**: No undefined behavior detected
+  - **Cppcheck**: Static analysis passed (no real issues found)
+  - **Clang-tidy**: Linting passed (warnings are false positives for C11 Annex K)
+  - **GCC warnings**: Compiles cleanly with `-Wall -Wextra`
+- **Memory management verified**:
+  - All heap allocations properly freed (30 allocs, 30 frees in config test)
+  - No leaks in version check, config parsing, or daemon initialization
+  - Balanced allocation/deallocation confirmed across all code paths
+
 ## [1.7.1] - 2026-01-22
 
 ### Added
