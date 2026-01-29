@@ -23,45 +23,52 @@ from rich.table import Table as RichTable
 from rich.text import Text
 
 
-# Event type constants (from bpf/common.h)
-EVENT_TYPES = {
-    1: "EXEC",
-    2: "EXIT",
-    3: "FILE_OPEN",
-    4: "FILE_CREATE",
-    5: "FILE_DELETE",
-    6: "FILE_MODIFY",
-    7: "TCP_CONN",
-    8: "TCP_ACCEPT",
-    9: "SETUID",
-    10: "SETGID",
-    11: "SUDO",
-    12: "UDP_SEND",
-    13: "UDP_RECV",
-    14: "PTRACE",
-    15: "MODULE",
-    16: "MEMFD",
-    17: "BIND",
-    18: "UNSHARE",
-    19: "EXECVEAT",
-    20: "BPF",
-    21: "CRED_READ",
-    22: "LDPRELOAD",
-    23: "VSOCK",
-    24: "PERSISTENCE",
-    25: "SUID",
-    26: "CRED_WRITE",
-    27: "LOG_TAMPER",
-    28: "RAW_DISK",
+# Event type strings (from JSON log format)
+# LinMon uses string event types in JSON, not numeric IDs
+EVENT_TYPE_DISPLAY = {
+    "process_exec": "EXEC",
+    "process_exit": "EXIT",
+    "file_open": "FILE_OPEN",
+    "file_create": "FILE_CREATE",
+    "file_delete": "FILE_DELETE",
+    "file_modify": "FILE_MODIFY",
+    "net_connect_tcp": "TCP_CONN",
+    "net_accept_tcp": "TCP_ACCEPT",
+    "priv_setuid": "SETUID",
+    "priv_setgid": "SETGID",
+    "priv_sudo": "SUDO",
+    "net_send_udp": "UDP_SEND",
+    "net_recv_udp": "UDP_RECV",
+    "security_ptrace": "PTRACE",
+    "security_module": "MODULE",
+    "security_memfd_create": "MEMFD",
+    "security_bind": "BIND",
+    "security_unshare": "UNSHARE",
+    "security_execveat": "EXECVEAT",
+    "security_bpf": "BPF",
+    "security_cred_read": "CRED_READ",
+    "security_ldpreload": "LDPRELOAD",
+    "net_vsock_connect": "VSOCK",
+    "security_persistence": "PERSISTENCE",
+    "security_suid": "SUID",
+    "security_cred_write": "CRED_WRITE",
+    "security_log_tamper": "LOG_TAMPER",
+    "raw_disk_access": "RAW_DISK",
+    "auth_integrity_violation": "AUTH_INTEGRITY",  # v1.7.1
 }
 
-# Event categories for filtering
+# Event categories for filtering (using string event types)
 EVENT_CATEGORIES = {
-    "process": {1, 2},  # EXEC, EXIT
-    "network": {7, 8, 12, 13, 23},  # TCP, UDP, VSOCK
-    "security": {14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28},
-    "file": {3, 4, 5, 6},
-    "privilege": {9, 10, 11},
+    "process": {"process_exec", "process_exit"},
+    "network": {"net_connect_tcp", "net_accept_tcp", "net_send_udp", "net_recv_udp", "net_vsock_connect"},
+    "security": {
+        "security_ptrace", "security_module", "security_memfd_create", "security_bind",
+        "security_unshare", "security_execveat", "security_bpf", "security_cred_read",
+        "security_ldpreload", "security_persistence", "security_suid", "security_cred_write",
+        "security_log_tamper", "raw_disk_access", "auth_integrity_violation"
+    },
+    "file": {"file_open", "file_create", "file_delete", "file_modify"},
+    "privilege": {"priv_setuid", "priv_setgid", "priv_sudo"},
 }
 
 
@@ -236,7 +243,7 @@ class EventFilter:
     """Filters events based on user criteria."""
 
     def __init__(self):
-        self.event_types: Optional[Set[int]] = None
+        self.event_types: Optional[Set[str]] = None
         self.username_filter: str = ""
 
     def set_category_filter(self, category: str):
@@ -412,8 +419,8 @@ class Dashboard:
             if y >= height - 1:
                 break
 
-            event_type = event.get('type', 0)
-            type_name = EVENT_TYPES.get(event_type, f"TYPE_{event_type}")
+            event_type = event.get('type', 'unknown')
+            type_name = EVENT_TYPE_DISPLAY.get(event_type, event_type.upper())
 
             # Color by category
             if event_type in EVENT_CATEGORIES['security']:

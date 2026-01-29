@@ -17,6 +17,7 @@ CREATE DATABASE IF NOT EXISTS linmon;
 CREATE TABLE IF NOT EXISTS linmon.events
 (
     -- Common fields (all events)
+    seq Nullable(UInt64),                                    -- v1.3.0: Event sequence number (tamper detection)
     timestamp DateTime64(3, 'UTC'),
     ingest_timestamp DateTime64(3, 'UTC') DEFAULT now64(3),
     hostname LowCardinality(String),
@@ -32,11 +33,20 @@ CREATE TABLE IF NOT EXISTS linmon.events
     uid Nullable(UInt32),
     username LowCardinality(Nullable(String)),
 
+    -- Sudo tracking (v1.3.0)
+    sudo_uid Nullable(UInt32),
+    sudo_user LowCardinality(Nullable(String)),
+
     -- Process details
     comm LowCardinality(Nullable(String)),
+    process_name LowCardinality(Nullable(String)),           -- v1.3.2: Basename of executable
     filename Nullable(String),
     cmdline Nullable(String),
     tty LowCardinality(Nullable(String)),
+
+    -- Process security flags (v1.3.3)
+    comm_mismatch Nullable(UInt8),                           -- Process masquerading detection
+    deleted_executable Nullable(UInt8),                      -- Fileless execution detection
 
     -- Binary verification (process_exec events)
     sha256 Nullable(FixedString(64)),
@@ -87,7 +97,20 @@ CREATE TABLE IF NOT EXISTS linmon.events
     tamper_type LowCardinality(Nullable(String)),       -- truncate, delete
     suid Nullable(UInt8),                                -- SUID bit set
     sgid Nullable(UInt8),                                -- SGID bit set
-    mode Nullable(UInt32)                                -- Full file mode for SUID events
+    mode Nullable(UInt32),                               -- Full file mode for SUID events
+
+    -- v1.5.0: Container metadata (sparse - only for containerized processes)
+    container_runtime LowCardinality(Nullable(String)),  -- docker, podman, kubernetes, containerd, lxc, systemd-nspawn
+    container_id LowCardinality(Nullable(String)),       -- Full container ID or name
+    container_pod_id LowCardinality(Nullable(String)),   -- Kubernetes pod UUID
+    container_ns_pid Nullable(UInt32),                   -- PID namespace inode
+    container_ns_mnt Nullable(UInt32),                   -- Mount namespace inode
+    container_ns_net Nullable(UInt32),                   -- Network namespace inode
+
+    -- v1.7.1: Authentication integrity monitoring (T1556.003/T1556.004)
+    auth_file_path Nullable(String),                     -- Path to monitored authentication file
+    auth_verdict LowCardinality(Nullable(String)),       -- not_in_package_database, modified_after_install, hash_mismatch
+    auth_modified Nullable(UInt8)                        -- Package modification flag
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
@@ -312,3 +335,139 @@ WHERE event_category = 'security';
 --   AND timestamp > now() - INTERVAL 7 DAY
 -- GROUP BY hour, hostname, type
 -- ORDER BY hour DESC, connection_count DESC;
+
+-- ==============================================================================
+-- v1.5.0+ Queries: Container Security
+-- ==============================================================================
+
+-- Find processes running in containers
+-- SELECT
+--     timestamp,
+--     hostname,
+--     container_runtime,
+--     container_id,
+--     comm,
+--     username,
+--     cmdline
+-- FROM linmon.events
+-- WHERE container_runtime IS NOT NULL
+--   AND timestamp > now() - INTERVAL 1 DAY
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect container escape attempts (namespace changes)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     username,
+--     container_runtime,
+--     container_ns_pid,
+--     container_ns_mnt,
+--     container_ns_net
+-- FROM linmon.events
+-- WHERE type = 'security_unshare'
+--   AND container_runtime IS NOT NULL
+-- ORDER BY timestamp DESC;
+
+-- Container activity by runtime
+-- SELECT
+--     container_runtime,
+--     count() as event_count,
+--     uniqExact(container_id) as unique_containers,
+--     uniqExact(comm) as unique_processes
+-- FROM linmon.events
+-- WHERE container_runtime IS NOT NULL
+--   AND timestamp > now() - INTERVAL 7 DAY
+-- GROUP BY container_runtime
+-- ORDER BY event_count DESC;
+
+-- ==============================================================================
+-- v1.3.0+ Queries: Sudo Tracking & Event Sequence
+-- ==============================================================================
+
+-- Find sudo privilege escalations
+-- SELECT
+--     timestamp,
+--     hostname,
+--     username,
+--     sudo_user,
+--     comm,
+--     cmdline
+-- FROM linmon.events
+-- WHERE sudo_uid IS NOT NULL
+--   AND timestamp > now() - INTERVAL 1 DAY
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect event sequence gaps (tamper detection)
+-- SELECT
+--     hostname,
+--     type,
+--     seq,
+--     seq - lagInFrame(seq, 1) OVER (PARTITION BY hostname ORDER BY seq) as seq_gap
+-- FROM linmon.events
+-- WHERE timestamp > now() - INTERVAL 1 HOUR
+-- HAVING seq_gap > 1
+-- ORDER BY seq DESC;
+
+-- ==============================================================================
+-- v1.3.3+ Queries: Process Masquerading & Fileless Execution
+-- ==============================================================================
+
+-- Detect process masquerading (comm mismatch)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     process_name,
+--     filename,
+--     username,
+--     cmdline
+-- FROM linmon.events
+-- WHERE comm_mismatch = 1
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Detect fileless execution (deleted binaries)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     comm,
+--     filename,
+--     username,
+--     sha256
+-- FROM linmon.events
+-- WHERE deleted_executable = 1
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- ==============================================================================
+-- v1.7.1+ Queries: Authentication Integrity Monitoring
+-- ==============================================================================
+
+-- Authentication file integrity violations (T1556.003/T1556.004)
+-- SELECT
+--     timestamp,
+--     hostname,
+--     auth_file_path,
+--     auth_verdict,
+--     package,
+--     auth_modified,
+--     sha256
+-- FROM linmon.events
+-- WHERE type = 'auth_integrity_violation'
+-- ORDER BY timestamp DESC
+-- LIMIT 100;
+
+-- Summary of authentication violations by file
+-- SELECT
+--     auth_file_path,
+--     auth_verdict,
+--     count() as violation_count,
+--     max(timestamp) as last_seen
+-- FROM linmon.events
+-- WHERE type = 'auth_integrity_violation'
+--   AND timestamp > now() - INTERVAL 7 DAY
+-- GROUP BY auth_file_path, auth_verdict
+-- ORDER BY violation_count DESC;

@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -106,6 +107,72 @@ void logger_set_rotation(const char *log_file, bool enabled,
 void logger_set_syslog(bool enabled)
 {
     enable_syslog = enabled;
+}
+
+// Helper: Convert container runtime enum to string (for syslog)
+static const char *container_runtime_name(const struct container_info *info)
+{
+    switch (info->runtime) {
+    case RUNTIME_DOCKER:
+        return "docker";
+    case RUNTIME_PODMAN:
+        return "podman";
+    case RUNTIME_CONTAINERD:
+        return "containerd";
+    case RUNTIME_LXC:
+        return "lxc";
+    case RUNTIME_SYSTEMD_NSPAWN:
+        return "systemd-nspawn";
+    case RUNTIME_KUBERNETES:
+        return "kubernetes";
+    case RUNTIME_UNKNOWN:
+        return "unknown";
+    case RUNTIME_NONE:
+    default:
+        return "none";
+    }
+}
+
+// Helper: Safe append to syslog buffer with overflow protection
+// Returns true if append succeeded, false if buffer full
+// SECURITY: Prevents buffer overflow from snprintf() return value accumulation
+static bool syslog_append(char *buf, size_t bufsize, size_t *pos, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+
+static bool syslog_append(char *buf, size_t bufsize, size_t *pos, const char *fmt, ...)
+{
+    // Safety check: if position already at/past end, buffer is full
+    if (*pos >= bufsize - 1) {
+        return false;  // Buffer full, cannot append
+    }
+
+    va_list args;
+    va_start(args, fmt);
+
+    // Calculate remaining space (always leave room for NULL terminator)
+    size_t remaining = bufsize - *pos;
+
+    // vsnprintf to format string into remaining buffer space
+    int written = vsnprintf(buf + *pos, remaining, fmt, args);
+    va_end(args);
+
+    // Check for errors or truncation
+    if (written < 0) {
+        return false;  // Encoding error
+    }
+
+    // snprintf returns bytes that WOULD be written (can exceed buffer)
+    // Only advance position by actual bytes written (capped at remaining-1)
+    if ((size_t)written >= remaining) {
+        // Output was truncated - advance to end of buffer
+        *pos = bufsize - 1;
+        buf[*pos] = '\0';  // Ensure NULL termination
+        return false;  // Indicate truncation
+    }
+
+    // Success: advance position by actual written bytes
+    *pos += written;
+    return true;
 }
 
 // Perform log rotation: events.json -> events.json.1 -> events.json.2 -> ...
@@ -642,21 +709,100 @@ int logger_log_process_event(const struct process_event *event)
 
     ret = fprintf(log_fp, "}\n");
 
+    // Prepare syslog data BEFORE unlocking mutex (collect all needed variables)
+    // This avoids holding mutex during syslog() call (which can block)
+    char syslog_buf[2048];
+    bool need_syslog = enable_syslog;
+
+    if (need_syslog && event->type == EVENT_PROCESS_EXEC) {
+        size_t pos = 0;
+
+        // Base event info: seq, hostname, user, process
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     "%s: seq=%lu host=%s user=%s(%u)",
+                     event_type, seq, hostname, username, event->uid);
+
+        // sudo tracking (if applicable)
+        if (event->sudo_uid > 0 && sudo_user[0]) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                         " sudo=%s(%u)", sudo_user, event->sudo_uid);
+        }
+
+        // TTY and process hierarchy
+        if (event->tty[0]) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                         " tty=%s", event->tty);
+        }
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     " pid=%u ppid=%u sid=%u", event->pid, event->ppid, event->sid);
+
+        // Process name and comm
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     " comm=%s", event->comm);
+
+        // File path
+        if (event->filename[0]) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                         " file=%s", event->filename);
+        }
+
+        // Package info (re-lookup since pkg was scoped)
+        if (enable_verify_packages && event->filename[0]) {
+            struct pkg_info pkg;
+            if (pkgcache_lookup(event->filename, &pkg) == 0) {
+                if (pkg.from_package && pkg.package[0]) {
+                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                 " pkg=%s", pkg.package);
+                    if (pkg.modified) {
+                        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                     " modified=yes");
+                    }
+                } else {
+                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos, " pkg=none");
+                }
+            }
+        }
+
+        // SHA256 (abbreviated for syslog)
+        if (sha256[0]) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                         " sha256=%.16s", sha256);  // First 16 chars
+        }
+
+        // Container info (sparse)
+        if (containerinfo_is_in_container(event->pid_ns, event->mnt_ns, event->net_ns)) {
+            struct container_info cinfo;
+            if (containerinfo_get(event->pid, &cinfo)) {
+                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                             " container=%s", container_runtime_name(&cinfo));
+                if (cinfo.id[0]) {
+                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                 " cid=%.12s", cinfo.id);  // Docker-style short ID
+                }
+            }
+        }
+
+        // Command line (last, can be long - use escaped version)
+        if (event->cmdline[0]) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                         " cmd=\"%s\"", cmdline_escaped);
+        }
+    } else if (need_syslog) {
+        // Process exit - simpler format
+        snprintf(syslog_buf, sizeof(syslog_buf),
+                "%s: seq=%lu host=%s user=%s(%u) pid=%u exit_code=%d comm=%s",
+                event_type, seq, hostname, username, event->uid,
+                event->pid, (int)event->exit_code, event->comm);
+    }
+
     pthread_mutex_unlock(&log_mutex);
 
     if (!check_fprintf_result(ret))
         return -EIO;
 
-    // Log to syslog if enabled
-    if (enable_syslog) {
-        if (event->cmdline[0]) {
-            syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s cmdline=\"%s\"",
-                   event_type, event->pid, event->uid, event->comm,
-                   cmdline_escaped);
-        } else {
-            syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s",
-                   event_type, event->pid, event->uid, event->comm);
-        }
+    // Log to syslog AFTER mutex unlock (avoids blocking while holding lock)
+    if (need_syslog) {
+        syslog(LOG_INFO, "%s", syslog_buf);
     }
 
     return 0;
@@ -904,16 +1050,27 @@ int logger_log_network_event(const struct network_event *event)
 
     ret = fprintf(log_fp, "}\n");
 
+    // Prepare syslog data BEFORE unlocking mutex
+    char syslog_buf[1024];
+    bool need_syslog = enable_syslog;
+
+    if (need_syslog) {
+        size_t pos = 0;
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     "%s: seq=%lu host=%s user=%s(%u) pid=%u comm=%s %s:%u->%s:%u",
+                     event_type, seq, hostname, username, event->uid,
+                     event->pid, event->comm,
+                     saddr_str, event->sport, daddr_str, event->dport);
+    }
+
     pthread_mutex_unlock(&log_mutex);
 
     if (!check_fprintf_result(ret))
         return -EIO;
 
-    // Log to syslog if enabled
-    if (enable_syslog) {
-        syslog(LOG_INFO, "%s: pid=%u uid=%u comm=%s %s:%u -> %s:%u",
-               event_type, event->pid, event->uid, event->comm,
-               saddr_str, event->sport, daddr_str, event->dport);
+    // Log to syslog AFTER mutex unlock
+    if (need_syslog) {
+        syslog(LOG_INFO, "%s", syslog_buf);
     }
 
     return 0;
@@ -1030,22 +1187,32 @@ int logger_log_privilege_event(const struct privilege_event *event)
 
     ret = fprintf(log_fp, "}\n");
 
+    // Prepare syslog data BEFORE unlocking mutex
+    char syslog_buf[1024];
+    bool need_syslog = enable_syslog;
+
+    if (need_syslog) {
+        size_t pos = 0;
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     "%s: seq=%lu host=%s pid=%u comm=%s %s(%u)->%s(%u)",
+                     event_type, seq, hostname, event->pid, event->comm,
+                     old_username, event->old_uid, new_username, event->new_uid);
+
+        // Add target process for sudo events
+        if (event->target_comm[0]) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                         " target=%s", event->target_comm);
+        }
+    }
+
     pthread_mutex_unlock(&log_mutex);
 
     if (!check_fprintf_result(ret))
         return -EIO;
 
-    // Log to syslog if enabled
-    if (enable_syslog) {
-        if (event->target_comm[0]) {
-            syslog(LOG_WARNING, "%s: pid=%u uid=%u->%u comm=%s target=\"%s\"",
-                   event_type, event->pid, event->old_uid, event->new_uid,
-                   event->comm, target_escaped);
-        } else {
-            syslog(LOG_WARNING, "%s: pid=%u uid=%u->%u comm=%s",
-                   event_type, event->pid, event->old_uid, event->new_uid,
-                   event->comm);
-        }
+    // Log to syslog AFTER mutex unlock (privilege events use LOG_WARNING)
+    if (need_syslog) {
+        syslog(LOG_WARNING, "%s", syslog_buf);
     }
 
     return 0;
@@ -1287,15 +1454,75 @@ int logger_log_security_event(const struct security_event *event)
 
     ret = fprintf(log_fp, "}\n");
 
+    // Prepare syslog data BEFORE unlocking mutex (security events are critical)
+    char syslog_buf[1024];
+    bool need_syslog = enable_syslog;
+
+    if (need_syslog) {
+        size_t pos = 0;
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     "SECURITY: seq=%lu type=%s host=%s user=%s(%u) pid=%u comm=%s",
+                     seq, event_type, hostname, username, event->uid,
+                     event->pid, event->comm);
+
+        // Add event-specific critical fields
+        switch (event->type) {
+        case EVENT_SECURITY_PTRACE:
+            if (event->target_pid) {
+                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                             " target_pid=%u", event->target_pid);
+            }
+            break;
+        case EVENT_SECURITY_MEMFD:
+            if (event->filename[0]) {  // memfd_name is stored in filename field
+                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                             " memfd=%s", event->filename);
+            }
+            break;
+        case EVENT_SECURITY_CRED_READ:
+        case EVENT_SECURITY_CRED_WRITE:
+            // Map event->extra to credential file type name
+            {
+                const char *cred_type = "unknown";
+                switch (event->extra) {
+                case 1: cred_type = "shadow"; break;
+                case 2: cred_type = "gshadow"; break;
+                case 3: cred_type = "sudoers"; break;
+                case 4: cred_type = "ssh_config"; break;
+                case 5: cred_type = "pam_config"; break;
+                case 6: cred_type = "ssh_private_key"; break;
+                case 7: cred_type = "ssh_authorized_keys"; break;
+                case 8: cred_type = "ssh_user_config"; break;
+                }
+                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                             " cred_file=%s", cred_type);
+                if (event->filename[0]) {  // Full path
+                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                 " path=%s", event->filename);
+                }
+            }
+            break;
+        case EVENT_SECURITY_LOG_TAMPER:
+        case EVENT_SECURITY_SUID:
+        case EVENT_RAW_DISK_ACCESS:
+            if (event->filename[0]) {
+                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                             " file=%s", event->filename);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
     pthread_mutex_unlock(&log_mutex);
 
     if (!check_fprintf_result(ret))
         return -EIO;
 
-    // Log to syslog if enabled (security events use LOG_WARNING)
-    if (enable_syslog) {
-        syslog(LOG_WARNING, "%s: pid=%u uid=%u comm=%s",
-               event_type, event->pid, event->uid, event->comm);
+    // Log to syslog AFTER mutex unlock (security events use LOG_WARNING for visibility)
+    if (need_syslog) {
+        syslog(LOG_WARNING, "%s", syslog_buf);
     }
 
     return 0;
@@ -1378,16 +1605,27 @@ int logger_log_persistence_event(const struct persistence_event *event)
 
     ret = fprintf(log_fp, "}\n");
 
+    // Prepare syslog data BEFORE unlocking mutex
+    char syslog_buf[1024];
+    bool need_syslog = enable_syslog;
+
+    if (need_syslog) {
+        size_t pos = 0;
+        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                     "SECURITY: seq=%lu type=security_persistence host=%s user=%s(%u) "
+                     "pid=%u comm=%s persistence=%s path=%s",
+                     seq, hostname, username, event->uid,
+                     event->pid, event->comm, persistence_type_str, event->path);
+    }
+
     pthread_mutex_unlock(&log_mutex);
 
     if (!check_fprintf_result(ret))
         return -EIO;
 
-    // Log to syslog if enabled (security events use LOG_WARNING)
-    if (enable_syslog) {
-        syslog(LOG_WARNING, "security_persistence: pid=%u uid=%u comm=%s path=%s type=%s",
-               event->pid, event->uid, event->comm, event->path,
-               persistence_type_str);
+    // Log to syslog AFTER mutex unlock (security events use LOG_WARNING)
+    if (need_syslog) {
+        syslog(LOG_WARNING, "%s", syslog_buf);
     }
 
     return 0;

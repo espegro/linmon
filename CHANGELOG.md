@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-01-29
+
+### Added
+- **Enriched syslog format** for all event types with comprehensive security context
+  - Added sequence number (`seq`) for tamper detection correlation
+  - Added hostname for multi-host environments
+  - Added username resolution (not just UID)
+  - Added sudo user tracking (`sudo=user(uid)`)
+  - Added process hierarchy (`ppid`, `sid`)
+  - Added full executable path
+  - Added package name and verification status
+  - Added SHA256 hash (abbreviated, first 16 chars)
+  - Added container runtime and ID information
+  - Example: `process_exec: seq=142 host=server01 user=alice(1000) sudo=bob(1000) tty=pts/1 pid=12345 ppid=12300 sid=12345 comm=bash file=/usr/bin/bash pkg=bash sha256=a1b2c3d4e5f6g7h8 cmd="/bin/bash -i"`
+- **Security event syslog enrichment**
+  - Prefix: `SECURITY:` for high-visibility filtering
+  - Event-specific critical fields (memfd name, credential files, target PIDs, etc.)
+  - Credential file type mapping for T1003/T1098 events
+- **Network and privilege event enrichment**
+  - Network: Shows connection endpoints with context
+  - Privilege: Shows UID transitions with usernames
+
+### Fixed
+- **CRITICAL: Buffer overflow protection** in syslog formatting code
+  - **Security Issue**: `pos += snprintf()` pattern could cause integer overflow
+  - **Impact**: When formatted string exceeds buffer size, `sizeof(buf) - pos` wraps around (unsigned math) → buffer overflow vulnerability
+  - **Fix**: Implemented safe `syslog_append()` helper function with proper bounds checking
+  - **Mitigation**: Position tracking uses `size_t`, checks buffer space before each append, guarantees NULL termination
+  - **Testing**: Verified with Valgrind (0 errors, 0 leaks), AddressSanitizer (no violations)
+- Added `<stdarg.h>` include for variadic function support
+
+### Security
+- All syslog code paths now protected against buffer overflow
+- Safe string append with truncation detection
+- Position tracking prevents unsigned integer wraparound
+- Comprehensive memory safety testing passed
+
+### Updated
+- **ClickHouse schema** (`extras/clickhouse/schema.sql`) updated with all v1.3.0-1.7.1 fields:
+  - Event sequence number (`seq`)
+  - Sudo user tracking (`sudo_uid`, `sudo_user`)
+  - Process security flags (`comm_mismatch`, `deleted_executable`, `process_name`)
+  - Container metadata (runtime, ID, pod ID, namespace inodes)
+  - Authentication integrity fields (`auth_file_path`, `auth_verdict`, `auth_modified`)
+  - Added example queries for containers, sudo tracking, masquerading, and auth integrity
+- **Monitoring dashboard** (`scripts/linmon-monitor.py`) updated for v1.7.1:
+  - Added `auth_integrity_violation` event type
+  - Fixed event type handling (uses string types from JSON, not numeric IDs)
+  - All event categories updated with new security events
+
 ## [1.7.2] - 2026-01-29
 
 ### Fixed
