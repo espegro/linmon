@@ -110,6 +110,10 @@ void logger_set_syslog(bool enabled)
 }
 
 // Helper: Convert container runtime enum to string (for syslog)
+//
+// Maps container runtime enum values (from containerinfo.h) to human-readable strings.
+// Used in syslog output to indicate which container runtime is hosting the process.
+// Returns "none" for host processes (not in container).
 static const char *container_runtime_name(const struct container_info *info)
 {
     switch (info->runtime) {
@@ -134,8 +138,28 @@ static const char *container_runtime_name(const struct container_info *info)
 }
 
 // Helper: Safe append to syslog buffer with overflow protection
-// Returns true if append succeeded, false if buffer full
-// SECURITY: Prevents buffer overflow from snprintf() return value accumulation
+//
+// SECURITY CRITICAL: This function prevents buffer overflow vulnerabilities that arise
+// from the common but dangerous pattern: pos += snprintf(buf + pos, size - pos, ...)
+//
+// THE VULNERABILITY:
+// snprintf() returns the number of bytes that WOULD have been written (excluding NULL),
+// which can exceed the buffer size. Example:
+//   char buf[100];
+//   int pos = 0;
+//   pos += snprintf(buf + pos, sizeof(buf) - pos, "%500s", str);  // returns 500
+//   // Now pos = 500, but buffer is only 100 bytes
+//   pos += snprintf(buf + pos, sizeof(buf) - pos, "...");
+//   // sizeof(buf) - pos = 100 - 500 = -400 (but size_t is unsigned!)
+//   // -400 wraps around to 4294967896 (on 32-bit) → MASSIVE BUFFER OVERFLOW
+//
+// THE FIX:
+// This function uses size_t for position tracking and validates remaining space
+// BEFORE writing. If snprintf() indicates truncation (written >= remaining), we
+// cap the position at buffer end and return false. Callers can continue safely -
+// subsequent appends will fail gracefully instead of corrupting memory.
+//
+// Returns: true if append succeeded, false if buffer full or truncated
 static bool syslog_append(char *buf, size_t bufsize, size_t *pos, const char *fmt, ...)
     __attribute__((format(printf, 4, 5)));
 
@@ -161,13 +185,13 @@ static bool syslog_append(char *buf, size_t bufsize, size_t *pos, const char *fm
         return false;  // Encoding error
     }
 
-    // snprintf returns bytes that WOULD be written (can exceed buffer)
+    // CRITICAL: snprintf returns bytes that WOULD be written (can exceed buffer)
     // Only advance position by actual bytes written (capped at remaining-1)
     if ((size_t)written >= remaining) {
         // Output was truncated - advance to end of buffer
         *pos = bufsize - 1;
         buf[*pos] = '\0';  // Ensure NULL termination
-        return false;  // Indicate truncation
+        return false;  // Indicate truncation (but buffer is safe)
     }
 
     // Success: advance position by actual written bytes
@@ -711,6 +735,28 @@ int logger_log_process_event(const struct process_event *event)
 
     // Prepare syslog data BEFORE unlocking mutex (collect all needed variables)
     // This avoids holding mutex during syslog() call (which can block)
+    //
+    // SYSLOG FORMAT DESIGN:
+    // The enriched syslog format provides comprehensive security context for SIEM integration.
+    // Fields are ordered by priority: identification (seq, host, user) → process context
+    // (pid, comm, file) → security metadata (package, hash, container) → command line.
+    //
+    // Field ordering rationale:
+    // 1. seq: Event sequence for tamper detection (gap analysis in SIEM)
+    // 2. host: Multi-host correlation
+    // 3. user: Primary actor (with UID for disambiguation)
+    // 4. sudo: Privilege escalation tracking (sparse field)
+    // 5. tty: Interactive vs background distinction
+    // 6. pid/ppid/sid: Process hierarchy for forensic reconstruction
+    // 7. comm: Kernel comm name (max 15 chars)
+    // 8. file: Full executable path (can detect path-based attacks)
+    // 9. pkg: Package verification (malware detection)
+    // 10. sha256: Binary integrity (abbreviated for brevity)
+    // 11. container: Runtime isolation context (sparse field)
+    // 12. cmd: Full command line (last, can be long and truncated)
+    //
+    // Buffer size: 2048 bytes allows for long command lines while preventing abuse.
+    // All appends use safe syslog_append() to prevent buffer overflow (see above).
     char syslog_buf[2048];
     bool need_syslog = enable_syslog;
 
@@ -1455,6 +1501,18 @@ int logger_log_security_event(const struct security_event *event)
     ret = fprintf(log_fp, "}\n");
 
     // Prepare syslog data BEFORE unlocking mutex (security events are critical)
+    //
+    // SECURITY EVENT SYSLOG FORMAT:
+    // Security events use "SECURITY:" prefix for high-visibility filtering in SIEM.
+    // This allows simple syslog queries like "facility:local0 AND message:SECURITY:"
+    // to catch all security events regardless of specific type.
+    //
+    // Format is more compact than process events (1024 vs 2048 bytes) because:
+    // 1. Security events rarely have long command lines
+    // 2. Critical fields are event-specific (memfd name, cred file, target PID)
+    // 3. Focus on actionable intelligence, not full forensic context
+    //
+    // Event-specific fields added via switch statement to avoid bloat.
     char syslog_buf[1024];
     bool need_syslog = enable_syslog;
 
@@ -1465,7 +1523,7 @@ int logger_log_security_event(const struct security_event *event)
                      seq, event_type, hostname, username, event->uid,
                      event->pid, event->comm);
 
-        // Add event-specific critical fields
+        // Add event-specific critical fields (sparse - only relevant fields per type)
         switch (event->type) {
         case EVENT_SECURITY_PTRACE:
             if (event->target_pid) {
