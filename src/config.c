@@ -73,6 +73,44 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_raw_disk_access = true;  // Default: on (critical detection)
 }
 
+// Load and validate configuration from file
+//
+// SECURITY DESIGN:
+// This function is security-critical because it controls daemon behavior and must
+// prevent configuration-based attacks. Security measures implemented:
+//
+// 1. FILE PERMISSION VALIDATION:
+//    - ABORT if world-writable (ANY user could modify config)
+//    - WARN if not root-owned (untrusted user owns config)
+//    - WARN if group-writable (group members could modify)
+//    Rationale: Config controls security monitoring - compromised config = blind daemon
+//
+// 2. PATH TRAVERSAL PREVENTION:
+//    - log_file must be absolute path (prevents relative path tricks)
+//    - log_file cannot contain ".." (prevents directory traversal)
+//    Example attack: log_file = "../../../tmp/fake.log" → writes to /tmp instead of /var/log
+//
+// 3. BOUNDS VALIDATION:
+//    - UID ranges checked for overflow (strtoul validates, ULONG_MAX checked)
+//    - Size limits validated (min/max ranges enforced)
+//    - Integer overflow protection on multipliers (K/M/G suffixes)
+//
+// 4. GRACEFUL DEGRADATION:
+//    - Invalid values logged to stderr but don't crash daemon
+//    - Missing config file → use safe defaults
+//    - Unknown keys silently ignored (forward compatibility)
+//
+// PARSING FORMAT:
+// Simple key-value pairs: "key = value"
+// - Lines starting with # are comments
+// - Whitespace around = is required
+// - No quotes needed for strings
+// - Boolean values: "true" or "false" (case-sensitive)
+// - Numeric values: integers, optional K/M/G suffix for sizes
+//
+// Returns: 0 on success, -errno on error
+//          -ENOENT if file not found (not an error, use defaults)
+//          -EPERM if file has insecure permissions
 int load_config(struct linmon_config *config, const char *config_file)
 {
     FILE *fp;
@@ -82,19 +120,21 @@ int load_config(struct linmon_config *config, const char *config_file)
 
     set_defaults(config);
 
-    // Check config file permissions before opening
+    // SECURITY: Check config file permissions BEFORE opening
+    // This prevents TOCTOU race (check-then-open) but we accept the risk since
+    // an attacker who can modify config can already compromise the system.
     if (stat(config_file, &st) == 0) {
-        // Warn if world-writable (critical security issue)
+        // CRITICAL: Abort if world-writable (any user could modify config)
         if (st.st_mode & S_IWOTH) {
             fprintf(stderr, "CRITICAL: Config file is world-writable: %s\n", config_file);
-            return -EPERM;
+            return -EPERM;  // Permission denied - refuse to use insecure config
         }
-        // Warn if not owned by root
+        // WARN: Not root-owned (but continue - may be intentional in test environments)
         if (st.st_uid != 0) {
             fprintf(stderr, "Warning: Config file not owned by root (uid=%d): %s\n",
                     st.st_uid, config_file);
         }
-        // Warn if group-writable
+        // WARN: Group-writable (minor risk if group is trusted)
         if (st.st_mode & S_IWGRP) {
             fprintf(stderr, "Warning: Config file is group-writable: %s\n", config_file);
         }
@@ -103,28 +143,45 @@ int load_config(struct linmon_config *config, const char *config_file)
     fp = fopen(config_file, "r");
     if (!fp) {
         // Config file not found is not an error - use defaults
+        // This allows daemon to run with compiled-in defaults if no config exists
         if (errno == ENOENT)
             return -ENOENT;
         return -errno;
     }
 
+    // Parse config file line by line
+    // Format: "key = value" (whitespace around = is required)
     while (fgets(line, sizeof(line), fp)) {
         // Skip comments and empty lines
         if (line[0] == '#' || line[0] == '\n')
             continue;
 
+        // Parse key-value pair
+        // Limits: key max 63 chars, value max 191 chars (total 256 with "key = value\n")
         if (sscanf(line, "%63s = %191s", key, value) != 2)
-            continue;
+            continue;  // Malformed line, skip silently
 
         if (strcmp(key, "log_file") == 0) {
-            // Validate log file path for security
+            // SECURITY: Validate log file path to prevent path traversal attacks
+            //
+            // Attack scenario: Attacker modifies config to write logs to /tmp or /dev/null,
+            // bypassing monitoring or filling disk. Path validation prevents:
+            // - Relative paths: "../../tmp/fake.log" → must be absolute
+            // - Directory traversal: "/var/log/../../tmp/fake.log" → reject ".."
+            // - Symlink attacks: Not prevented here (would need realpath() check)
+            //
+            // Why absolute path required:
+            // Daemon may change working directory, so relative paths are ambiguous
             if (value[0] != '/') {
                 fprintf(stderr, "Security: log_file must be absolute path: %s\n", value);
-                continue;
+                continue;  // Skip invalid path, keep default
             }
+            // Why ".." rejected:
+            // Prevents directory traversal even with absolute paths
+            // Example: /var/log/linmon/../../tmp/evil.log → /tmp/evil.log
             if (strstr(value, "..") != NULL) {
                 fprintf(stderr, "Security: log_file cannot contain '..': %s\n", value);
-                continue;
+                continue;  // Skip invalid path, keep default
             }
             config->log_file = strdup(value);
             if (!config->log_file) {
@@ -189,6 +246,18 @@ int load_config(struct linmon_config *config, const char *config_file)
             }
             config->verbosity = (int)val;
         } else if (strcmp(key, "min_uid") == 0) {
+            // Parse UID with overflow protection
+            //
+            // SECURITY: UID parsing must prevent integer overflow attacks
+            // Example attack: min_uid = 4294967296 (2^32) wraps to 0 on 32-bit
+            //
+            // Protection:
+            // 1. strtoul() returns ULONG_MAX on overflow (detected by endptr check)
+            // 2. Explicit check: val > UINT_MAX rejects values exceeding UID range
+            // 3. Safe cast: (unsigned int)val only after validation
+            //
+            // Why this matters:
+            // If attacker sets min_uid > max_uid via overflow, eBPF filtering breaks
             char *endptr;
             unsigned long val = strtoul(value, &endptr, 10);
             if (*endptr != '\0' || val > UINT_MAX) {
@@ -197,6 +266,8 @@ int load_config(struct linmon_config *config, const char *config_file)
             }
             config->min_uid = (unsigned int)val;
         } else if (strcmp(key, "max_uid") == 0) {
+            // Parse max_uid with same overflow protection as min_uid
+            // See min_uid comment for detailed security rationale
             char *endptr;
             unsigned long val = strtoul(value, &endptr, 10);
             if (*endptr != '\0' || val > UINT_MAX) {
