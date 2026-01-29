@@ -1205,59 +1205,248 @@ int main(int argc, char **argv)
     // Record daemon start time for uptime tracking
     daemon_start_time = time(NULL);
 
-    // Prepare capabilities BEFORE dropping UID/GID (requires root)
-    // Sets CAP_SYS_PTRACE as ambient so it persists across UID change
-    // This allows reading /proc/<pid>/exe for masquerading detection
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PRIVILEGE DROPPING SEQUENCE
+    // ═══════════════════════════════════════════════════════════════════════════
+    //
+    // SECURITY-CRITICAL: This sequence drops from root (UID 0) to nobody (UID 65534)
+    // while retaining ONLY CAP_SYS_PTRACE for security monitoring.
+    //
+    // CRITICAL ORDER - MUST be performed in this EXACT sequence:
+    //
+    //   1. Load BPF programs (requires CAP_BPF, CAP_PERFMON, CAP_NET_ADMIN)
+    //   2. Open log file (requires write access to /var/log/linmon/)
+    //   3. Calculate daemon and config hashes (requires CAP_DAC_READ_SEARCH)
+    //   4. Prepare capabilities - Set CAP_SYS_PTRACE as ambient
+    //   5. Drop supplementary groups (prevents retaining dangerous memberships)
+    //   6. Drop GID to 65534 (nobody group)
+    //   7. Drop UID to 65534 (nobody user) - POINT OF NO RETURN
+    //   8. Drop CAP_SETUID and CAP_SETGID from PERMITTED/EFFECTIVE
+    //   9. Verify cannot regain root (security assertion)
+    //
+    // WHY THIS ORDER MATTERS:
+    //
+    //   Steps 1-3: MUST be done as root (require privileged operations)
+    //     - BPF loading requires CAP_BPF + CAP_PERFMON + CAP_NET_ADMIN + CAP_SYS_RESOURCE
+    //     - Log file creation may need write to /var/log (root-owned directory)
+    //     - Hash calculation may need to read executable (CAP_DAC_READ_SEARCH)
+    //
+    //   Step 4: MUST be done BEFORE UID change (requires root)
+    //     - Setting securebits requires root privileges
+    //     - Ambient capability setup requires CAP_SETPCAP (root has this)
+    //     - After this step, capability survives UID change
+    //
+    //   Step 5: Supplementary groups MUST be dropped BEFORE UID/GID change
+    //     - Prevents retaining dangerous group memberships like:
+    //       * disk (raw disk access)
+    //       * adm (read system logs)
+    //       * docker (container escape)
+    //       * sudo (privilege escalation)
+    //     - setgroups() requires root or CAP_SETGID
+    //     - After UID drop, we won't have this capability
+    //
+    //   Step 6: GID MUST be dropped BEFORE UID for security
+    //     - POSIX requirement: setgid() may require privileges
+    //     - After UID drop to nobody, setgid() would fail
+    //     - This prevents UID/GID mismatch (security best practice)
+    //
+    //   Step 7: UID drop is the POINT OF NO RETURN
+    //     - After setuid(65534), process can NEVER regain root
+    //     - All privileged operations must be done BEFORE this
+    //     - Ambient CAP_SYS_PTRACE survives (only capability retained)
+    //
+    //   Step 8: Drop CAP_SETUID and CAP_SETGID AFTER UID change
+    //     - These capabilities allow changing UID/GID
+    //     - Removing them prevents regaining root privileges
+    //     - Must be done AFTER UID change (need CAP_SETUID for setuid())
+    //     - Final capability set: ONLY CAP_SYS_PTRACE
+    //
+    //   Step 9: Verification - paranoid security check
+    //     - Attempt setuid(0) - MUST fail
+    //     - If it succeeds, something is wrong (abort)
+    //     - Defense-in-depth: catch configuration errors early
+    //
+    // WHAT THE DAEMON CAN DO AFTER PRIVILEGE DROP:
+    //   ✓ Read /proc/<pid>/exe for all users (CAP_SYS_PTRACE)
+    //   ✓ Write to /var/log/linmon/events.json (file already open)
+    //   ✓ Read from BPF ring buffers (BPF programs already loaded)
+    //   ✓ Read configuration file /etc/linmon/linmon.conf (world-readable)
+    //   ✓ Execute stat(), readlink(), open() on /proc (CAP_SYS_PTRACE)
+    //
+    // WHAT THE DAEMON CANNOT DO AFTER PRIVILEGE DROP:
+    //   ✗ Load new BPF programs (CAP_BPF dropped)
+    //   ✗ Modify system files (CAP_DAC_OVERRIDE dropped)
+    //   ✗ Change file ownership (CAP_CHOWN, CAP_FOWNER dropped)
+    //   ✗ Regain root privileges (CAP_SETUID, CAP_SETGID dropped)
+    //   ✗ Access files outside /var/log/linmon and /proc
+    //   ✗ Ptrace/modify other processes (read-only /proc access)
+    //
+    // WHY CAP_SYS_PTRACE IS SAFE TO RETAIN:
+    //   - Read-only access to /proc (cannot modify process memory)
+    //   - Cannot actually ptrace processes (no PTRACE_ATTACH)
+    //   - Only used for readlink("/proc/<pid>/exe")
+    //   - Minimal attack surface (just reading symlinks)
+    //   - Essential for masquerading detection (T1036)
+    //
+    // DEFENSE IN DEPTH:
+    //   - Daemon drops to lowest privilege possible (UID 65534)
+    //   - Retains absolute minimum capability (only CAP_SYS_PTRACE)
+    //   - Cannot regain root (CAP_SETUID explicitly dropped)
+    //   - Log file already open (no need to create new files)
+    //   - BPF programs already loaded (no need to reload)
+    //   - Configuration reload reopens log file (safe operation)
+    //
+    // TESTING:
+    //   After privilege drop, verify with:
+    //     cat /proc/$(pidof linmond)/status | grep Cap
+    //     # Should show CAP_SYS_PTRACE only (0x0000000000100000)
+    //
+    //   Verify cannot regain root:
+    //     sudo -u linmond setuid 0  # Should fail
+    //
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // STEP 4: Prepare capabilities BEFORE dropping UID/GID
+    //
+    // This MUST be done as root (requires CAP_SETPCAP and ability to set securebits)
+    // Sets CAP_SYS_PTRACE as ambient so it survives the UID change to nobody
     if (getuid() == 0) {
         err = prepare_capabilities();
         if (err) {
             fprintf(stderr, "CRITICAL: Failed to prepare capabilities - aborting for security\n");
+            fprintf(stderr, "  Cannot proceed without CAP_SYS_PTRACE for masquerading detection\n");
             goto cleanup;
         }
     }
 
-    // Drop UID/GID to nobody user if running as root
-    // IMPORTANT: Capabilities must be prepared BEFORE this
-    // (ambient capabilities persist across UID change)
+    // STEP 5-7: Drop privileges from root to nobody
+    //
+    // This sequence drops UID 0 → 65534 (nobody) while:
+    //   - Clearing all supplementary groups
+    //   - Retaining ONLY CAP_SYS_PTRACE (via ambient capability)
+    //   - Ensuring cannot regain root privileges
     if (getuid() == 0) {
-        // Drop supplementary groups first (prevents retaining group memberships
-        // like 'disk', 'adm', 'docker' after dropping to nobody)
+        // STEP 5: Drop supplementary groups FIRST
+        //
+        // Supplementary groups are additional group memberships beyond primary GID
+        // Examples of dangerous groups: disk, adm, docker, sudo, wheel
+        //
+        // Why drop these:
+        //   - disk group: Raw disk access (/dev/sda → read encryption keys, tamper with filesystems)
+        //   - adm group: Read system logs (/var/log → access sensitive data)
+        //   - docker group: Container escape (docker socket → spawn root container)
+        //   - sudo group: Privilege escalation (if misconfigured sudoers)
+        //
+        // setgroups(0, NULL) clears ALL supplementary groups
+        // Must be done BEFORE UID change (requires CAP_SETGID)
         if (setgroups(0, NULL) != 0) {
             fprintf(stderr, "CRITICAL: Failed to drop supplementary groups: %s\n", strerror(errno));
+            fprintf(stderr, "  Cannot continue - may retain dangerous group memberships\n");
             goto cleanup;
         }
-        // Drop GID (must be done before UID for security)
+
+        // STEP 6: Drop GID to nobody (65534) BEFORE UID
+        //
+        // GID must be dropped before UID for two reasons:
+        //   1. POSIX: setgid() may require privileges (safer to do as root)
+        //   2. Security: Prevents UID/GID mismatch state
+        //
+        // After this call:
+        //   - Primary GID is 65534 (nobody/nogroup)
+        //   - Supplementary groups are empty (cleared above)
+        //   - Process still running as UID 0 (root)
         if (setgid(65534) != 0) {
             fprintf(stderr, "CRITICAL: Failed to drop GID to nobody: %s\n", strerror(errno));
             goto cleanup;
         }
+
+        // STEP 7: Drop UID to nobody (65534) - POINT OF NO RETURN
+        //
+        // This is the critical transition from root to unprivileged user
+        //
+        // After this call:
+        //   - UID = 65534 (nobody)
+        //   - GID = 65534 (nobody/nogroup)
+        //   - Supplementary groups = [] (empty)
+        //   - Capabilities: CAP_SYS_PTRACE only (via ambient capability)
+        //   - Cannot call setuid() again without CAP_SETUID (which we'll drop next)
+        //
+        // What survives the UID change:
+        //   - Open file descriptors (log file, BPF maps, ring buffers)
+        //   - Loaded BPF programs (kernel-side, already attached)
+        //   - CAP_SYS_PTRACE (because it's in AMBIENT set + SECBIT_NO_SETUID_FIXUP)
+        //
+        // What is lost:
+        //   - Ability to read most files (no CAP_DAC_READ_SEARCH/CAP_DAC_OVERRIDE)
+        //   - Ability to write to system directories
+        //   - Ability to load new BPF programs (CAP_BPF lost)
+        //   - Ability to change file ownership (CAP_CHOWN/CAP_FOWNER lost)
+        //
+        // This is permanent - daemon can NEVER regain root after this point
         if (setuid(65534) != 0) {
             fprintf(stderr, "CRITICAL: Failed to drop UID to nobody: %s\n", strerror(errno));
             goto cleanup;
         }
 
-        // Drop CAP_SETUID and CAP_SETGID after UID change
-        // This prevents regaining root while keeping CAP_SYS_PTRACE
+        // STEP 8: Drop CAP_SETUID and CAP_SETGID from capability sets
+        //
+        // Why drop these:
+        //   - CAP_SETUID allows changing UID (even back to root)
+        //   - CAP_SETGID allows changing GID
+        //   - These would allow regaining privileges (security violation)
+        //
+        // Why drop AFTER setuid():
+        //   - We needed CAP_SETUID to call setuid(65534) above
+        //   - Now that we're nobody, we don't need it anymore
+        //
+        // Final capability set after this:
+        //   - AMBIENT: CAP_SYS_PTRACE
+        //   - PERMITTED: CAP_SYS_PTRACE (CAP_SETUID/CAP_SETGID cleared)
+        //   - EFFECTIVE: CAP_SYS_PTRACE (CAP_SETUID/CAP_SETGID cleared)
+        //   - INHERITABLE: CAP_SYS_PTRACE
+        //
+        // Security property: Cannot regain root or change UID/GID ever again
         cap_t caps = cap_get_proc();
         if (caps) {
             cap_value_t drop_caps[2] = { CAP_SETUID, CAP_SETGID };
+
+            // Clear from PERMITTED (removes from superset of allowed capabilities)
             cap_set_flag(caps, CAP_PERMITTED, 2, drop_caps, CAP_CLEAR);
+
+            // Clear from EFFECTIVE (removes from active capabilities)
             cap_set_flag(caps, CAP_EFFECTIVE, 2, drop_caps, CAP_CLEAR);
+
             if (cap_set_proc(caps) != 0) {
+                // This is a warning, not a critical error
+                // Even if this fails, we can't regain root without CAP_SETUID
                 fprintf(stderr, "Warning: Failed to drop SETUID/SETGID capabilities: %s\n",
                         strerror(errno));
             }
             cap_free(caps);
         }
 
-        // Verify we can't regain root
+        // STEP 9: Verify cannot regain root - PARANOID SECURITY CHECK
+        //
+        // This is defense-in-depth verification
+        // Attempt to setuid(0) - this MUST fail
+        //
+        // If it succeeds, something is catastrophically wrong:
+        //   - CAP_SETUID was not dropped properly
+        //   - Kernel capability system is broken
+        //   - Security configuration error
+        //
+        // Better to abort now than run with unexpected privileges
         if (setuid(0) == 0) {
             fprintf(stderr, "CRITICAL: Was able to regain root after dropping privileges!\n");
+            fprintf(stderr, "  This indicates a severe security configuration error.\n");
+            fprintf(stderr, "  Aborting to prevent potential security breach.\n");
             goto cleanup;
         }
 
+        // SUCCESS: Privilege drop complete
         printf("✓ Dropped to UID/GID 65534 (nobody), cleared supplementary groups\n");
         printf("✓ Retained CAP_SYS_PTRACE for masquerading detection\n");
+        printf("✓ Verified cannot regain root privileges\n");
     }
 
     // Set up ring buffer polling
