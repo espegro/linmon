@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-02-06
+
+### Fixed
+- **CRITICAL: Command injection vulnerability in linmon-report.sh**
+  - Added input validation for `--limit` parameter to prevent arbitrary command execution
+  - Vulnerability: Unsanitized user input (`--limit '10; rm -rf /'`) was interpolated into shell commands
+  - Impact: High - script is used with sudo in examples and documentation
+  - Fix: Validate `--limit` is numeric before using in `head -n $LIMIT` command
+
+- **HIGH: Raw disk access events silently dropped (security blind spot)**
+  - Added `EVENT_RAW_DISK_ACCESS` to case labels in `handle_event()` switch statement
+  - Vulnerability: Events were checked for config flag but never reached logger (unreachable code path)
+  - Impact: `monitor_raw_disk_access` feature completely non-functional, defeating T1006 detection
+  - Fix: Include event type in case labels so events reach `logger_log_security_event()`
+
+- **MEDIUM: Insecure temporary directory in release signing script**
+  - Replaced predictable `/tmp/linmon-release-$$` with `mktemp -d`
+  - Vulnerability: Predictable temp directory enables symlink race attacks in shared environments
+  - Impact: Potential compromise of release signing process
+  - Fix: Use secure `mktemp -d` for atomic temporary directory creation
+
+### Changed
+- **Documentation: Clarified CAP_SYS_PTRACE security trade-off**
+  - Updated code comments and CLAUDE.md to accurately reflect capability permissions
+  - Acknowledged that CAP_SYS_PTRACE does permit ptrace(2) syscalls if daemon is compromised
+  - Documented security mitigations: daemon runs as UID 65534 (nobody), minimal attack surface
+  - Explained why capability is necessary: required for masquerading detection (T1036.004)
+  - Note: No code change, documentation only - clarifies existing security model
+
 ## [1.7.3] - 2026-01-29
 
 ### Added
