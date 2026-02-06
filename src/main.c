@@ -419,7 +419,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     case EVENT_SECURITY_LDPRELOAD:
     case EVENT_SECURITY_SUID:
     case EVENT_SECURITY_CRED_WRITE:
-    case EVENT_SECURITY_LOG_TAMPER: {
+    case EVENT_SECURITY_LOG_TAMPER:
+    case EVENT_RAW_DISK_ACCESS: {
         // Check respective config flags
         if (type == EVENT_SECURITY_PTRACE && !global_config.monitor_ptrace)
             return 0;
@@ -1281,12 +1282,13 @@ int main(int argc, char **argv)
     //   ✗ Access files outside /var/log/linmon and /proc
     //   ✗ Ptrace/modify other processes (read-only /proc access)
     //
-    // WHY CAP_SYS_PTRACE IS SAFE TO RETAIN:
-    //   - Read-only access to /proc (cannot modify process memory)
-    //   - Cannot actually ptrace processes (no PTRACE_ATTACH)
-    //   - Only used for readlink("/proc/<pid>/exe")
-    //   - Minimal attack surface (just reading symlinks)
-    //   - Essential for masquerading detection (T1036)
+    // WHY CAP_SYS_PTRACE IS RETAINED (security trade-off):
+    //   - Required for reading /proc/<pid>/exe across UID boundaries
+    //   - Essential for masquerading detection (T1036.004 - MITRE ATT&CK)
+    //   - Daemon only uses for read-only /proc access (readlink, stat, open)
+    //   - WARNING: Capability DOES permit ptrace(2) syscalls if code is compromised
+    //   - Defense: Daemon runs as UID 65534 (nobody), minimal attack surface
+    //   - No viable alternative (setuid wrapper would be worse security risk)
     //
     // DEFENSE IN DEPTH:
     //   - Daemon drops to lowest privilege possible (UID 65534)

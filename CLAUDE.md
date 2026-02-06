@@ -410,10 +410,12 @@ After privilege drop, daemon **cannot**:
 - Access files outside `/var/log/linmon/` and `/proc`
 - Regain root privileges (CAP_SETUID/CAP_SETGID explicitly dropped)
 
-**Retained capability**: CAP_SYS_PTRACE
-- Purpose: Read `/proc/<pid>/exe` for all users (required for masquerading detection)
+**Retained capability**: CAP_SYS_PTRACE (security trade-off)
+- Purpose: Read `/proc/<pid>/exe` for all users (required for masquerading detection - T1036.004)
 - Implementation: Ambient capabilities (kernel >= 4.3)
-- Security: Read-only access to `/proc`, cannot ptrace processes or modify memory
+- Usage: Daemon only uses for read-only `/proc` access (readlink, stat, open)
+- Risk: Capability DOES permit ptrace(2) syscalls if daemon code is compromised
+- Mitigation: Daemon runs as UID 65534 (nobody), minimal attack surface, no viable alternative
 
 ### Configuration Security
 

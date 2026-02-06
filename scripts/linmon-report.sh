@@ -159,6 +159,11 @@ fi
 # Apply limit
 LIMIT_CMD="cat"
 if [[ -n "$LIMIT" ]]; then
+    # Validate LIMIT is a positive integer (prevent command injection)
+    if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+        echo "Error: --limit must be a positive integer" >&2
+        exit 1
+    fi
     LIMIT_CMD="head -n $LIMIT"
 fi
 

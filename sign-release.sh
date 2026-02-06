@@ -11,14 +11,18 @@ if [ $# -ne 1 ]; then
 fi
 
 VERSION="$1"
-WORKDIR="/tmp/linmon-release-$$"
 GPG_KEY="50AE70D791320122"
+
+# Create secure temporary directory
+WORKDIR=$(mktemp -d)
+if [[ ! -d "$WORKDIR" ]]; then
+    echo "Error: Failed to create temporary directory" >&2
+    exit 1
+fi
 
 echo "=== Signing LinMon Release $VERSION ==="
 echo ""
 
-# Create temporary directory
-mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
 # Download release binaries
