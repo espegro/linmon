@@ -342,6 +342,33 @@ cat /etc/passwd
 tail -f /var/log/linmon/events.json
 ```
 
+### Unit Testing
+
+LinMon has a comprehensive unit test suite covering config parsing, filtering, logging, and more.
+
+```bash
+# Run all unit tests
+make test
+
+# Run specific test suite
+./build/tests/test_config
+./build/tests/test_filter
+./build/tests/test_logger
+```
+
+**Test Mode**: Unit tests run with `LINMON_TEST_MODE=1` environment variable, which:
+- Allows non-root-owned config files (for temporary test configs)
+- Skips group-writable validation on test configs
+- Still validates world-writable permissions (critical security check)
+
+**Production Mode** (default):
+- Config file MUST be root-owned (uid=0)
+- Config file MUST NOT be group-writable
+- Config file MUST NOT be world-writable
+- Violations result in hard failure (-EPERM)
+
+These restrictions prevent privilege escalation since config is read before privilege drop and controls log file path.
+
 ### Common Issues
 
 **Build fails with "vmlinux.h not found"**: Generate it using bpftool (see above)

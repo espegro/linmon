@@ -125,7 +125,7 @@ test: $(TEST_BINS)
 	@echo "=============================="
 	@for test in $(TEST_BINS); do \
 		echo ""; \
-		$$test || exit 1; \
+		LINMON_TEST_MODE=1 $$test || exit 1; \
 	done
 	@echo ""
 	@echo "=============================="

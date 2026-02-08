@@ -123,20 +123,35 @@ int load_config(struct linmon_config *config, const char *config_file)
     // SECURITY: Check config file permissions BEFORE opening
     // This prevents TOCTOU race (check-then-open) but we accept the risk since
     // an attacker who can modify config can already compromise the system.
+    // Allow test mode to skip ownership checks for unit tests (LINMON_TEST_MODE env var)
+    bool test_mode = getenv("LINMON_TEST_MODE") != NULL;
+
     if (stat(config_file, &st) == 0) {
         // CRITICAL: Abort if world-writable (any user could modify config)
         if (st.st_mode & S_IWOTH) {
             fprintf(stderr, "CRITICAL: Config file is world-writable: %s\n", config_file);
             return -EPERM;  // Permission denied - refuse to use insecure config
         }
-        // WARN: Not root-owned (but continue - may be intentional in test environments)
-        if (st.st_uid != 0) {
-            fprintf(stderr, "Warning: Config file not owned by root (uid=%d): %s\n",
-                    st.st_uid, config_file);
-        }
-        // WARN: Group-writable (minor risk if group is trusted)
-        if (st.st_mode & S_IWGRP) {
-            fprintf(stderr, "Warning: Config file is group-writable: %s\n", config_file);
+
+        if (!test_mode) {
+            // CRITICAL: Abort if not root-owned
+            // Config is read before privilege drop and can control log file path,
+            // which is opened/chmod'd as root. Non-root ownership is privilege escalation vector.
+            if (st.st_uid != 0) {
+                fprintf(stderr, "CRITICAL: Config file not owned by root (uid=%d): %s\n",
+                        st.st_uid, config_file);
+                fprintf(stderr, "Fix with: chown root:root %s\n", config_file);
+                return -EPERM;
+            }
+
+            // CRITICAL: Abort if group-writable
+            // Group-writable config allows any group member to modify settings.
+            // Since config controls log file path and is read as root, this is unsafe.
+            if (st.st_mode & S_IWGRP) {
+                fprintf(stderr, "CRITICAL: Config file is group-writable: %s\n", config_file);
+                fprintf(stderr, "Fix with: chmod 0600 %s\n", config_file);
+                return -EPERM;
+            }
         }
     }
 

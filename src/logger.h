@@ -13,6 +13,10 @@
 // Initialize logger with output file
 int logger_init(const char *log_file);
 
+// Open log file with secure permissions (used by SIGHUP reload)
+// Returns: FILE pointer on success, NULL on error (sets errno)
+FILE *logger_open_file_secure(const char *log_file);
+
 // Set enrichment options
 void logger_set_enrichment(bool resolve_usernames, bool hash_binaries,
                            bool verify_packages, bool container_metadata);

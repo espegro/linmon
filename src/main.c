@@ -1512,8 +1512,9 @@ int main(int argc, char **argv)
             }
 
             // Initialize new logger BEFORE closing old one (avoid race condition)
+            // Use secure file opening to prevent permission vulnerabilities
             const char *new_log_file = new_config.log_file ? new_config.log_file : "/var/log/linmon/events.json";
-            FILE *new_log_fp = fopen(new_log_file, "a");
+            FILE *new_log_fp = logger_open_file_secure(new_log_file);
             if (!new_log_fp) {
                 fprintf(stderr, "CRITICAL: Failed to open new log file %s: %s\n",
                         new_log_file, strerror(errno));
@@ -1521,7 +1522,6 @@ int main(int argc, char **argv)
                 reload_config = false;
                 continue;
             }
-            setlinebuf(new_log_fp);
 
             // Update global config
             free_config(&global_config);

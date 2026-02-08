@@ -47,16 +47,32 @@ static int rotation_max_files = 10;
 static unsigned long bytes_written = 0;
 static const unsigned long ROTATION_CHECK_INTERVAL = 4096;  // Check every 4KB written
 
-int logger_init(const char *log_file)
+// Helper: Open log file with secure permissions
+// Returns: FILE pointer on success, NULL on error (sets errno)
+//
+// This function ensures log files are created with restrictive permissions:
+// - Sets umask(0077) before opening to prevent world-readable files
+// - Explicitly chmod(0640) after opening for defense in depth
+// - Restores original umask before returning
+//
+// Used by both logger_init() and SIGHUP config reload to prevent permission
+// vulnerabilities (CVE-2024-XXXX - log file created with weak permissions).
+FILE *logger_open_file_secure(const char *log_file)
 {
+    if (!log_file) {
+        errno = EINVAL;
+        return NULL;
+    }
+
     // Set restrictive umask for log file creation (prevents world-readable files)
     mode_t old_umask = umask(0077);
 
-    log_fp = fopen(log_file, "a");
-    if (!log_fp) {
+    FILE *fp = fopen(log_file, "a");
+    if (!fp) {
         int saved_errno = errno;
         umask(old_umask);  // Restore umask before returning
-        return -saved_errno;
+        errno = saved_errno;
+        return NULL;
     }
 
     // Set permissions to 0640 (rw-r-----) for defense in depth
@@ -67,7 +83,17 @@ int logger_init(const char *log_file)
     umask(old_umask);
 
     // Set line buffering
-    setlinebuf(log_fp);
+    setlinebuf(fp);
+
+    return fp;
+}
+
+int logger_init(const char *log_file)
+{
+    log_fp = logger_open_file_secure(log_file);
+    if (!log_fp) {
+        return -errno;
+    }
 
     // Get hostname for multi-host SIEM deployments
     if (gethostname(hostname, sizeof(hostname)) != 0) {
