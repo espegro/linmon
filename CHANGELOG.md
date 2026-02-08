@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-02-08
+
+### Fixed
+- **MEDIUM: Insecure log file permissions on SIGHUP reload**
+  - Log files created during config reload lacked proper permission settings
+  - Vulnerability: New files could be created with process umask (potentially world-readable)
+  - Impact: Sensitive security event data could be exposed to unprivileged users
+  - Fix: Created `logger_open_file_secure()` helper that sets umask(0077) and chmod(0640)
+  - Applied to both `logger_init()` and SIGHUP reload path for consistent security
+
+- **MEDIUM: Weak config file ownership validation (privilege escalation vector)**
+  - Non-root owned config files only generated warnings, did not abort
+  - Vulnerability: Config is read as root and controls log file path (opened/chmod'd as root)
+  - Impact: Attacker controlling non-root config could set arbitrary log_file path for privilege escalation
+  - Fix: Changed to hard failure (-EPERM) on non-root ownership or group-writable permissions
+  - Production requirement: Config must be root:root with mode 0600
+
+### Added
+- **Test mode for unit tests**: `LINMON_TEST_MODE` environment variable
+  - Allows unit tests to use temporary non-root config files
+  - Production mode (default) enforces strict ownership validation
+  - Makefile sets test mode automatically when running `make test`
+
+### Changed
+- **Security hardening**: Config file validation now strictly enforced
+  - Config must be owned by root (uid=0)
+  - Config must not be group-writable
+  - Config must not be world-writable
+  - Violations result in immediate abort with clear remediation instructions
+
 ## [1.7.4] - 2026-02-06
 
 ### Fixed
