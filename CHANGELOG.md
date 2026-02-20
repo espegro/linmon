@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-02-20
+
+### Security
+
+**CRITICAL FIXES**:
+
+- **Symlink Attack Prevention**: Replaced `fopen()` with `safe_fopen()` wrapper using `O_NOFOLLOW`
+  - Prevents attackers from using symlinks to manipulate arbitrary files
+  - Affects: logger.c, filehash.c, pkgcache.c
+  - Detection: Symlink attempts logged to syslog with `SECURITY:` prefix
+  - Impact: Daemon refuses to start if symlink detected in /var/log/linmon or /var/cache/linmon
+
+- **Dedicated System User**: Replaced shared `nobody` (UID 65534) with dedicated `linmon` user
+  - Provides isolation from other system services
+  - Prevents DoS attacks from compromised containers/services
+  - Migration: install.sh automatically creates user and migrates file ownership
+  - Impact: Existing installations upgraded seamlessly on `sudo make install`
+
+- **Signal Sender Validation**: Only root may send SIGHUP/SIGTERM to daemon
+  - Prevents unauthorized config reloads and service stops
+  - Unauthorized attempts logged with sender UID/PID for forensics
+  - Impact: Compromised services can no longer tamper with monitoring
+
+**LOW SEVERITY**:
+
+- **Grep Injection Fix**: Added `--` separator to `linmon-query.sh` search function
+  - Prevents option injection attacks (e.g., `-f /etc/shadow`)
+  - Impact: Query script (local admin tool only)
+
+### Changed
+
+- **install.sh**: Now creates `linmon` system user and performs automatic migration
+  - Stops daemon → creates user → migrates ownership → restarts
+  - Idempotent: safe to run multiple times
+  - SELinux: Restores file contexts after ownership change (RHEL/Rocky)
+
+- **Privilege Drop**: Changed from `setuid(65534)` to `getpwnam("linmon")`
+  - Requires `sudo make install` to create user before daemon runs
+  - Helpful error if linmon user missing
+
+### Added
+
+- **src/utils.c**: New `safe_fopen()` utility with O_NOFOLLOW protection
+  - Unit tests: 4 tests covering regular files, append, symlinks, invalid modes
+  - Documentation: Attack scenarios and mitigation strategy in SECURITY.md
+
 ## [1.7.5] - 2026-02-08
 
 ### Fixed
