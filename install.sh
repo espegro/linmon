@@ -24,10 +24,27 @@ fi
 
 echo -e "${GREEN}=== LinMon Installation ===${NC}"
 
-# 1. Create log directory with proper permissions
-echo -e "${YELLOW}[1/7]${NC} Creating log directory..."
+# 1. Create dedicated system user
+echo -e "${YELLOW}[1/8]${NC} Creating linmon system user..."
+if id -u linmon >/dev/null 2>&1; then
+    echo -e "${GREEN}✓${NC} User 'linmon' already exists"
+else
+    useradd --system --no-create-home --shell /usr/sbin/nologin linmon
+    echo -e "${GREEN}✓${NC} Created system user 'linmon'"
+fi
+
+# Check if we need to migrate from nobody to linmon
+DAEMON_WAS_RUNNING=false
+if systemctl is-active --quiet linmond 2>/dev/null; then
+    DAEMON_WAS_RUNNING=true
+    echo -e "${YELLOW}[Migration]${NC} Stopping daemon for ownership migration..."
+    systemctl stop linmond
+fi
+
+# 2. Create log directory with proper permissions
+echo -e "${YELLOW}[2/8]${NC} Creating log directory..."
 mkdir -p /var/log/linmon
-chown nobody:${NOBODY_GROUP} /var/log/linmon
+chown -R linmon:linmon /var/log/linmon
 chmod 0750 /var/log/linmon
 
 # Fix SELinux context for log directory (RHEL/Rocky/Fedora)
@@ -37,12 +54,12 @@ if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
     fi
 fi
 
-echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
+echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: linmon:linmon, mode: 0750)"
 
-# 2. Create cache directory for package verification
-echo -e "${YELLOW}[2/7]${NC} Creating cache directory..."
+# 3. Create cache directory for package verification
+echo -e "${YELLOW}[3/8]${NC} Creating cache directory..."
 mkdir -p /var/cache/linmon
-chown nobody:${NOBODY_GROUP} /var/cache/linmon
+chown -R linmon:linmon /var/cache/linmon
 chmod 0750 /var/cache/linmon
 
 # Fix SELinux context for cache directory (RHEL/Rocky/Fedora)
@@ -52,10 +69,10 @@ if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
     fi
 fi
 
-echo -e "${GREEN}✓${NC} Cache directory: /var/cache/linmon (owner: nobody:${NOBODY_GROUP}, mode: 0750)"
+echo -e "${GREEN}✓${NC} Cache directory: /var/cache/linmon (owner: linmon:linmon, mode: 0750)"
 
-# 3. Create and secure config directory
-echo -e "${YELLOW}[3/7]${NC} Installing configuration..."
+# 4. Create and secure config directory
+echo -e "${YELLOW}[4/8]${NC} Installing configuration..."
 mkdir -p /etc/linmon
 
 # Only copy config if it doesn't exist (don't overwrite existing config)
@@ -74,8 +91,8 @@ chattr +i /etc/linmon/linmon.conf 2>/dev/null || echo -e "${YELLOW}⚠${NC} Coul
 
 echo -e "${GREEN}✓${NC} Config permissions: root:root, mode: 0600"
 
-# 3. Install binary
-echo -e "${YELLOW}[4/7]${NC} Installing binary..."
+# 5. Install binary
+echo -e "${YELLOW}[5/8]${NC} Installing binary..."
 if [ ! -f build/linmond ]; then
     echo -e "${RED}Error: build/linmond not found. Run 'make' first.${NC}"
     exit 1
@@ -99,8 +116,8 @@ chattr +i /usr/local/sbin/linmond 2>/dev/null || echo -e "${YELLOW}⚠${NC} Coul
 
 echo -e "${GREEN}✓${NC} Installed binary: /usr/local/sbin/linmond"
 
-# 4. Install systemd service
-echo -e "${YELLOW}[5/7]${NC} Installing systemd service..."
+# 6. Install systemd service
+echo -e "${YELLOW}[6/8]${NC} Installing systemd service..."
 if [ -f linmond.service ]; then
     cp linmond.service /etc/systemd/system/
     systemctl daemon-reload
@@ -109,19 +126,19 @@ else
     echo -e "${YELLOW}⚠${NC} linmond.service not found, skipping systemd installation"
 fi
 
-# 4.5. Install logrotate config
-echo -e "${YELLOW}[6/7]${NC} Installing logrotate configuration..."
+# 7. Install logrotate config
+echo -e "${YELLOW}[7/8]${NC} Installing logrotate configuration..."
 if [ -f linmond.logrotate ]; then
-    # Adjust group name for distro (nogroup for Debian/Ubuntu, nobody for RHEL/Rocky)
-    sed "s/nobody nogroup/nobody ${NOBODY_GROUP}/" linmond.logrotate > /etc/logrotate.d/linmond
+    # Use linmon user instead of nobody
+    sed "s/nobody nogroup/linmon linmon/" linmond.logrotate > /etc/logrotate.d/linmond
     chmod 0644 /etc/logrotate.d/linmond
     echo -e "${GREEN}✓${NC} Installed logrotate config to /etc/logrotate.d/linmond"
 else
     echo -e "${YELLOW}⚠${NC} linmond.logrotate not found, skipping logrotate installation"
 fi
 
-# 5. Verify security
-echo -e "${YELLOW}[5/7]${NC} Verifying security configuration..."
+# 8. Verify security
+echo -e "${YELLOW}[8/8]${NC} Verifying security configuration..."
 
 # Check config file permissions
 CONF_PERM=$(stat -c %a /etc/linmon/linmon.conf)
@@ -147,9 +164,20 @@ else
     echo -e "${GREEN}✓${NC} Binary has no capabilities (will run as root initially)"
 fi
 
-# 6. Enable and start service
-echo -e "${YELLOW}[6/7]${NC} Service configuration..."
-if systemctl list-unit-files | grep -q linmond.service; then
+# 9. Restart daemon if it was running (after migration)
+if [ "$DAEMON_WAS_RUNNING" = true ]; then
+    echo -e "${YELLOW}[Migration]${NC} Restarting daemon after ownership migration..."
+    systemctl start linmond
+    sleep 2
+    if systemctl is-active --quiet linmond; then
+        echo -e "${GREEN}✓${NC} Daemon successfully restarted"
+    else
+        echo -e "${RED}✗${NC} Daemon failed to restart - check: systemctl status linmond"
+    fi
+fi
+
+# 10. Enable and start service (if not already running)
+if systemctl list-unit-files | grep -q linmond.service && [ "$DAEMON_WAS_RUNNING" = false ]; then
     read -p "Enable and start linmond service now? [y/N] " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -170,8 +198,8 @@ if systemctl list-unit-files | grep -q linmond.service; then
     fi
 fi
 
-# 7. Verify logrotate
-echo -e "${YELLOW}[7/7]${NC} Verifying logrotate configuration..."
+# Verify logrotate (no step number, part of final checks)
+echo -e "\n${YELLOW}Verifying logrotate configuration...${NC}"
 if [ -f /etc/logrotate.d/linmond ]; then
     # Test logrotate config syntax
     if logrotate -d /etc/logrotate.d/linmond >/dev/null 2>&1; then
@@ -186,12 +214,14 @@ fi
 echo -e "\n${GREEN}=== Installation Complete ===${NC}"
 echo -e "Binary:    /usr/local/sbin/linmond"
 echo -e "Config:    /etc/linmon/linmon.conf"
-echo -e "Logs:      /var/log/linmon/events.json"
+echo -e "Logs:      /var/log/linmon/events.json (owner: linmon:linmon)"
+echo -e "Cache:     /var/cache/linmon (owner: linmon:linmon)"
 echo -e "Logrotate: /etc/logrotate.d/linmond"
 echo -e "Service:   systemctl status linmond"
 echo -e "\n${GREEN}Security features enabled:${NC}"
+echo -e "  ✓ Dedicated system user (linmon)"
 echo -e "  ✓ Capability dropping (all capabilities cleared)"
-echo -e "  ✓ UID/GID dropping (runs as nobody:${NOBODY_GROUP})"
+echo -e "  ✓ UID/GID dropping (runs as linmon:linmon)"
 echo -e "  ✓ Config file validation (permissions checked)"
 echo -e "  ✓ Path traversal protection (log_file validated)"
 echo -e "  ✓ Systemd hardening (if service installed)"

@@ -22,6 +22,7 @@
 #include "pkgcache.h"
 #include "procfs.h"
 #include "containerinfo.h"
+#include "utils.h"
 
 static FILE *log_fp = NULL;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -67,17 +68,19 @@ FILE *logger_open_file_secure(const char *log_file)
     // Set restrictive umask for log file creation (prevents world-readable files)
     mode_t old_umask = umask(0077);
 
-    FILE *fp = fopen(log_file, "a");
+    FILE *fp = safe_fopen(log_file, "a", 0640);
     if (!fp) {
         int saved_errno = errno;
         umask(old_umask);  // Restore umask before returning
+
+        // Detect symlink attack
+        if (saved_errno == ELOOP) {
+            syslog(LOG_ERR, "SECURITY: Symlink attack detected on log file: %s", log_file);
+        }
+
         errno = saved_errno;
         return NULL;
     }
-
-    // Set permissions to 0640 (rw-r-----) for defense in depth
-    // Even though directory is 0750, file should also have restrictive permissions
-    chmod(log_file, 0640);
 
     // Restore original umask (don't affect other operations)
     umask(old_umask);

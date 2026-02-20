@@ -33,7 +33,8 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **Sensitive Data Redaction**: Automatically redact passwords, tokens, API keys from command lines
 - **Binary Hashing**: Optional SHA256 hashing of executed binaries for integrity monitoring
 - **Package Verification**: Check if binaries belong to system packages (dpkg/rpm) with persistent cache
-- **Privilege Dropping**: Daemon runs as `nobody` (UID 65534) after BPF load, retains only CAP_SYS_PTRACE for masquerading detection
+- **Privilege Dropping**: Daemon runs as dedicated `linmon` system user after BPF load, retains only CAP_SYS_PTRACE for masquerading detection
+- **Symlink Attack Prevention**: All file operations use `O_NOFOLLOW` to prevent symlink attacks
 - **Process Masquerading Detection**: Detects when processes impersonate other programs via prctl() comm name changes
 - **Deleted Executable Detection**: Identifies fileless malware and post-exploitation cleanup patterns
 - **Hardened systemd**: Full security hardening with seccomp, ProtectSystem, PrivateTmp
@@ -71,6 +72,13 @@ LinMon consists of two main components:
 See **[extras/README.md](extras/README.md)** for optional feature documentation.
 
 ## Installation
+
+### Prerequisites
+
+- Linux kernel >= 5.8 with BTF support
+- Root access (for installation and BPF loading)
+
+**Note**: The installation creates a dedicated `linmon` system user for privilege isolation. This user is automatically created by `install.sh` or `make install`. Existing installations will be automatically migrated from the previous `nobody` user.
 
 ### Pre-built Binaries (Recommended)
 

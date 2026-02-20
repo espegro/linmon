@@ -7,20 +7,23 @@ LinMon implements defense-in-depth security measures to minimize attack surface.
 LinMon follows a strict privilege dropping sequence:
 
 ### 1. UID/GID Dropping (First)
-LinMon drops to `nobody` user (UID/GID 65534) after:
+LinMon drops to dedicated `linmon` system user after:
 - BPF programs are loaded and attached
 - Log file is opened
 - All privileged operations complete
 
 ```c
-setgroups(0, NULL);  // Clear ALL supplementary groups (disk, adm, docker, etc.)
-setgid(65534);       // Drop to nobody group
-setuid(65534);       // Drop to nobody user
+struct passwd *pw = getpwnam("linmon");
+setgroups(0, NULL);           // Clear ALL supplementary groups (disk, adm, docker, etc.)
+setgid(pw->pw_gid);           // Drop to linmon group
+setuid(pw->pw_uid);           // Drop to linmon user
 ```
 
 **Critical**:
 - Supplementary groups must be cleared first (prevents retaining privileged group memberships)
 - This must happen BEFORE dropping capabilities (requires CAP_SETUID/CAP_SETGID)
+- Dedicated `linmon` user provides isolation from other system services using `nobody` (UID 65534)
+- Prevents shared UID attacks where compromised containers/services could interfere with daemon
 
 ### 2. Capability Retention (After UID/GID Drop)
 LinMon retains **only CAP_SYS_PTRACE** after privilege drop for masquerading detection:
@@ -29,12 +32,12 @@ LinMon retains **only CAP_SYS_PTRACE** after privilege drop for masquerading det
 // Before UID drop:
 prepare_capabilities();  // Set CAP_SYS_PTRACE as ambient capability
 
-// After UID/GID drop to nobody:
+// After UID/GID drop to linmon:
 // Drop CAP_SETUID and CAP_SETGID to prevent regaining root
 cap_set_flag(caps, CAP_PERMITTED, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
 cap_set_flag(caps, CAP_EFFECTIVE, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
 
-// Result: nobody user with only CAP_SYS_PTRACE (read /proc/<pid>/exe)
+// Result: linmon user with only CAP_SYS_PTRACE (read /proc/<pid>/exe)
 ```
 
 **Purpose**: CAP_SYS_PTRACE allows reading `/proc/<pid>/exe` for all users, enabling process masquerading detection.
@@ -47,6 +50,28 @@ cap_set_flag(caps, CAP_EFFECTIVE, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
 - Verification ensures cannot regain root: `setuid(0)` must fail
 
 **Critical**: If capability setup fails, LinMon **aborts** (does not continue with incorrect privileges).
+
+### Symlink Attack Prevention
+
+LinMon protects against symlink attacks using `O_NOFOLLOW`:
+
+**Attack Vector (Prevented)**:
+```bash
+# Attacker with write access to /var/log/linmon
+ln -s /etc/shadow /var/log/linmon/events.json
+# Daemon restart would have chmod'd /etc/shadow (before fix)
+```
+
+**Mitigation**:
+- All file operations use `safe_fopen()` wrapper with `O_NOFOLLOW`
+- Symlink attempts fail with `ELOOP` errno
+- Security events logged to syslog with `SECURITY:` prefix
+- Daemon startup fails safely (refuses to proceed)
+
+**Signal Sender Validation**:
+- Only root (UID 0) may send SIGHUP/SIGTERM to daemon
+- Unauthorized signals rejected and logged
+- Prevents DoS attacks from compromised services
 
 ## Configuration Security
 
@@ -444,7 +469,7 @@ Location: `/etc/logrotate.d/linmond`
 - **Daily rotation** or when logs reach 100MB
 - **30 days retention** (configurable)
 - **Compression** of old logs (gzip)
-- **Correct permissions** on rotated files (0640 nobody:nogroup)
+- **Correct permissions** on rotated files (0640 linmon:linmon)
 - **Date-based naming** for easy identification
 
 **Testing**:
@@ -465,8 +490,8 @@ Edit `/etc/logrotate.d/linmond` to adjust:
 ## Installation Security Checklist
 
 **Note on Group Names**: Different Linux distributions use different group names for the unprivileged user:
-- **Debian/Ubuntu**: Use `nobody:nogroup`
-- **RHEL/Rocky/CentOS/AlmaLinux**: Use `nobody:nobody`
+- **Debian/Ubuntu**: Use `linmon:linmon`
+- **RHEL/Rocky/CentOS/AlmaLinux**: Use `linmon:linmon`
 
 The Makefile and install.sh scripts automatically detect and use the correct group for your distribution.
 
@@ -474,14 +499,14 @@ The Makefile and install.sh scripts automatically detect and use the correct gro
 # 1. Create log directory with proper permissions
 sudo mkdir -p /var/log/linmon
 # Ubuntu/Debian:
-sudo chown nobody:nogroup /var/log/linmon
+sudo chown linmon:linmon /var/log/linmon
 # RHEL/Rocky/CentOS:
-# sudo chown nobody:nobody /var/log/linmon
+# sudo chown linmon:linmon /var/log/linmon
 sudo chmod 0750 /var/log/linmon
 
 # 2. Create cache directory for package verification
 sudo mkdir -p /var/cache/linmon
-sudo chown nobody:nogroup /var/cache/linmon  # or nobody:nobody on RHEL
+sudo chown linmon:linmon /var/cache/linmon  # or linmon:linmon on RHEL
 sudo chmod 0750 /var/cache/linmon
 
 # 3. Secure config file

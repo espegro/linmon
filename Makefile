@@ -118,6 +118,10 @@ $(TEST_BIN_DIR)/test_config: $(TEST_DIR)/test_config.c $(SRC_DIR)/config.c | $(T
 $(TEST_BIN_DIR)/test_procfs: $(TEST_DIR)/test_procfs.c $(SRC_DIR)/procfs.c | $(TEST_BIN_DIR)
 	$(CC) $(TEST_CFLAGS) $^ -o $@
 
+# Compile test for utils.c
+$(TEST_BIN_DIR)/test_utils: $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $^ -o $@
+
 # Run all tests
 test: $(TEST_BINS)
 	@echo ""

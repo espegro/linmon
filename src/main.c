@@ -13,6 +13,7 @@
 #include <sys/capability.h>
 #include <sys/prctl.h>
 #include <grp.h>
+#include <pwd.h>
 #include <syslog.h>
 #include <time.h>
 #include <sys/utsname.h>
@@ -66,6 +67,17 @@ static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
         signal_sender_uid = info->si_uid;
     }
 
+    // Validate sender for security-critical signals
+    if (sig == SIGHUP || sig == SIGTERM) {
+        if (info && info->si_uid != 0) {
+            // Log rejection with full context for forensics
+            syslog(LOG_WARNING, "SECURITY: Rejected signal %d from unauthorized UID %d (PID %d)",
+                   sig, (int)info->si_uid, (int)info->si_pid);
+            return;  // Ignore signal
+        }
+    }
+
+    // Process authorized signal
     if (sig == SIGINT || sig == SIGTERM) {
         exiting = true;
     } else if (sig == SIGHUP) {
@@ -1347,28 +1359,50 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
-        // STEP 6: Drop GID to nobody (65534) BEFORE UID
+        // STEP 6: Get linmon user information
+        //
+        // LinMon uses a dedicated system user instead of 'nobody' (UID 65534)
+        //
+        // Why dedicated user:
+        //   - Isolation: Other services may use nobody - shared UID enables lateral movement
+        //   - Auditability: ps/top shows "linmon" owner, easier to identify in logs
+        //   - Security: Prevents UID collision attacks between unrelated services
+        //   - Best practice: Each daemon should have its own system user
+        //
+        // The linmon user is created by install.sh with:
+        //   - UID/GID assigned by system (typically 100-999 range on systemd systems)
+        //   - Home: /nonexistent (no home directory)
+        //   - Shell: /usr/sbin/nologin (cannot login)
+        //   - System user flag (--system)
+        struct passwd *linmon_user = getpwnam("linmon");
+        if (!linmon_user) {
+            fprintf(stderr, "CRITICAL: linmon user not found. Run 'sudo make install' first.\n");
+            fprintf(stderr, "The installation script creates the dedicated linmon system user.\n");
+            goto cleanup;
+        }
+
+        // STEP 7: Drop GID to linmon BEFORE UID
         //
         // GID must be dropped before UID for two reasons:
         //   1. POSIX: setgid() may require privileges (safer to do as root)
         //   2. Security: Prevents UID/GID mismatch state
         //
         // After this call:
-        //   - Primary GID is 65534 (nobody/nogroup)
+        //   - Primary GID is linmon's GID (from /etc/group)
         //   - Supplementary groups are empty (cleared above)
         //   - Process still running as UID 0 (root)
-        if (setgid(65534) != 0) {
-            fprintf(stderr, "CRITICAL: Failed to drop GID to nobody: %s\n", strerror(errno));
+        if (setgid(linmon_user->pw_gid) != 0) {
+            fprintf(stderr, "CRITICAL: Failed to drop GID to linmon: %s\n", strerror(errno));
             goto cleanup;
         }
 
-        // STEP 7: Drop UID to nobody (65534) - POINT OF NO RETURN
+        // STEP 8: Drop UID to linmon - POINT OF NO RETURN
         //
         // This is the critical transition from root to unprivileged user
         //
         // After this call:
-        //   - UID = 65534 (nobody)
-        //   - GID = 65534 (nobody/nogroup)
+        //   - UID = linmon UID (from /etc/passwd)
+        //   - GID = linmon GID (from /etc/group)
         //   - Supplementary groups = [] (empty)
         //   - Capabilities: CAP_SYS_PTRACE only (via ambient capability)
         //   - Cannot call setuid() again without CAP_SETUID (which we'll drop next)
@@ -1385,12 +1419,12 @@ int main(int argc, char **argv)
         //   - Ability to change file ownership (CAP_CHOWN/CAP_FOWNER lost)
         //
         // This is permanent - daemon can NEVER regain root after this point
-        if (setuid(65534) != 0) {
-            fprintf(stderr, "CRITICAL: Failed to drop UID to nobody: %s\n", strerror(errno));
+        if (setuid(linmon_user->pw_uid) != 0) {
+            fprintf(stderr, "CRITICAL: Failed to drop UID to linmon: %s\n", strerror(errno));
             goto cleanup;
         }
 
-        // STEP 8: Drop CAP_SETUID and CAP_SETGID from capability sets
+        // STEP 9: Drop CAP_SETUID and CAP_SETGID from capability sets
         //
         // Why drop these:
         //   - CAP_SETUID allows changing UID (even back to root)
@@ -1398,8 +1432,8 @@ int main(int argc, char **argv)
         //   - These would allow regaining privileges (security violation)
         //
         // Why drop AFTER setuid():
-        //   - We needed CAP_SETUID to call setuid(65534) above
-        //   - Now that we're nobody, we don't need it anymore
+        //   - We needed CAP_SETUID to call setuid() above
+        //   - Now that we're running as linmon user, we don't need it anymore
         //
         // Final capability set after this:
         //   - AMBIENT: CAP_SYS_PTRACE
@@ -1427,7 +1461,7 @@ int main(int argc, char **argv)
             cap_free(caps);
         }
 
-        // STEP 9: Verify cannot regain root - PARANOID SECURITY CHECK
+        // STEP 10: Verify cannot regain root - PARANOID SECURITY CHECK
         //
         // This is defense-in-depth verification
         // Attempt to setuid(0) - this MUST fail
@@ -1446,7 +1480,8 @@ int main(int argc, char **argv)
         }
 
         // SUCCESS: Privilege drop complete
-        printf("✓ Dropped to UID/GID 65534 (nobody), cleared supplementary groups\n");
+        printf("✓ Dropped to UID/GID %d/%d (linmon), cleared supplementary groups\n",
+               (int)linmon_user->pw_uid, (int)linmon_user->pw_gid);
         printf("✓ Retained CAP_SYS_PTRACE for masquerading detection\n");
         printf("✓ Verified cannot regain root privileges\n");
     }
