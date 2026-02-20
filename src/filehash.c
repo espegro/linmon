@@ -10,10 +10,12 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <errno.h>
+#include <syslog.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
 #include "filehash.h"
+#include "utils.h"
 
 #define HASH_BUCKETS 4096
 #define READ_BUFFER_SIZE 8192
@@ -282,20 +284,15 @@ int filehash_save(void)
     // Set restrictive umask before file creation (prevents world-readable files)
     mode_t old_umask = umask(0077);
 
-    fp = fopen(tmp_path, "w");
+    fp = safe_fopen(tmp_path, "w", 0600);
     if (!fp) {
         int saved_errno = errno;
         umask(old_umask);  // Restore umask before returning
-        return -saved_errno;
-    }
 
-    // Set restrictive permissions (0600) for defense in depth
-    // Even though umask is 0077, explicitly set permissions to ensure correctness
-    if (fchmod(fileno(fp), 0600) != 0) {
-        int saved_errno = errno;
-        umask(old_umask);  // Restore umask before error return
-        fclose(fp);
-        unlink(tmp_path);
+        if (saved_errno == ELOOP) {
+            syslog(LOG_ERR, "SECURITY: Symlink attack detected on hash cache: %s", tmp_path);
+        }
+
         return -saved_errno;
     }
 
