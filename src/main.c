@@ -66,6 +66,17 @@ static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
         signal_sender_uid = info->si_uid;
     }
 
+    // Validate sender for security-critical signals
+    if (sig == SIGHUP || sig == SIGTERM) {
+        if (info && info->si_uid != 0) {
+            // Log rejection with full context for forensics
+            syslog(LOG_WARNING, "SECURITY: Rejected signal %d from unauthorized UID %d (PID %d)",
+                   sig, (int)info->si_uid, (int)info->si_pid);
+            return;  // Ignore signal
+        }
+    }
+
+    // Process authorized signal
     if (sig == SIGINT || sig == SIGTERM) {
         exiting = true;
     } else if (sig == SIGHUP) {
