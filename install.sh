@@ -75,6 +75,10 @@ echo -e "${GREEN}✓${NC} Cache directory: /var/cache/linmon (owner: linmon:linm
 echo -e "${YELLOW}[4/8]${NC} Installing configuration..."
 mkdir -p /etc/linmon
 
+# Remove immutable flag from existing files (from previous install)
+chattr -i /etc/linmon/linmon.conf 2>/dev/null || true
+chattr -i /usr/local/sbin/linmond 2>/dev/null || true
+
 # Only copy config if it doesn't exist (don't overwrite existing config)
 if [ ! -f /etc/linmon/linmon.conf ]; then
     cp linmon.conf /etc/linmon/
