@@ -162,7 +162,7 @@ cmd_timeline() {
 cmd_search() {
     local pattern="$1"
     echo "=== Search Results for: $pattern (last $LIMIT) ==="
-    grep -i "$pattern" "$LOGFILE" | tail -n "$LIMIT" | jq '.'
+    grep -i -- "$pattern" "$LOGFILE" | tail -n "$LIMIT" | jq '.'
 }
 
 cmd_top_talkers() {
