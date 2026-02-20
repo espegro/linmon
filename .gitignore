@@ -34,3 +34,4 @@ report.json
 # Release signing artifacts
 SHA256SUMS
 SHA256SUMS.asc
+.worktrees/
