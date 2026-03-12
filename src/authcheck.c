@@ -443,8 +443,8 @@ static void log_auth_integrity_violation(const char *file_path,
     pthread_mutex_t *mutex = logger_get_mutex();
     if (mutex) pthread_mutex_lock(mutex);
 
-    // Get sequence number
-    uint64_t seq = logger_get_sequence() + 1;
+    // Get sequence number (atomic)
+    uint64_t seq = logger_get_next_sequence();
 
     fprintf(log_fp, "{\"seq\":%lu,"
                    "\"timestamp\":\"%s\","

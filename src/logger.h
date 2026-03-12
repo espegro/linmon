@@ -62,6 +62,11 @@ pthread_mutex_t *logger_get_mutex(void);
 // Get current sequence number (for tamper detection)
 uint64_t logger_get_sequence(void);
 
+// Get next sequence number atomically (for non-logger subsystems)
+// Thread-safe, increments both sequence and event count
+// Use this instead of logger_get_sequence() + 1 for logging
+uint64_t logger_get_next_sequence(void);
+
 // Get total event count (for tamper detection)
 unsigned long logger_get_event_count(void);
 

@@ -27,6 +27,7 @@
 #include "filehash.h"
 #include "pkgcache.h"
 #include "procfs.h"
+#include "utils.h"
 #include "authcheck.h"
 #include "linmon.skel.h"
 #include "../bpf/common.h"
@@ -1099,7 +1100,10 @@ int main(int argc, char **argv)
         // Create persistent alert file (forensic evidence, survives daemon exit)
         // This file can be checked by monitoring systems, SIEM, or manual investigation
         const char *alert_file = "/var/log/linmon/CRITICAL_BPF_LOAD_FAILED";
-        FILE *alert_fp = fopen(alert_file, "w");
+        FILE *alert_fp = safe_fopen(alert_file, "w", 0640);
+        if (!alert_fp && errno == ELOOP) {
+            syslog(LOG_CRIT, "SECURITY: Symlink attack detected on alert file: %s", alert_file);
+        }
         if (alert_fp) {
             time_t now = time(NULL);
             char *time_str = ctime(&now);

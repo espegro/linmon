@@ -565,6 +565,13 @@ The version is passed to the compiler via `-DLINMON_VERSION` and used in:
 3. **Path Traversal in Credential Detection**:
    - eBPF sees raw syscall path argument, not kernel-resolved path
    - `/etc/../etc/shadow` or symlinks to /etc/shadow bypass detection
+
+4. **Package Integrity Verification** (as of v1.7.7):
+   - pkgcache only verifies package OWNERSHIP, not file CONTENT
+   - Does NOT call dpkg --verify or rpm -V for cryptographic verification
+   - A trojaned binary still in its original package will show modified=false
+   - Real content verification planned for v1.8.0
+   - Current detection: Only files not from any package (from_package=false)
    - Fixing requires LSM hooks or file_open tracepoints (major change)
    - Low risk: attackers rarely use redundant `/../` paths
 

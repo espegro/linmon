@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-03-12
+
+### Security
+
+**CRITICAL FIXES**:
+
+- **Symlink Attack Prevention**: Fixed TOCTOU vulnerability in file creation
+  - **CVE Impact**: Attacker could truncate arbitrary files (e.g., /etc/passwd)
+  - **Fix**: Replaced direct fopen() with safe_fopen() (O_NOFOLLOW) in 3 locations
+  - **Detection**: Symlink attempts now logged to syslog with SECURITY prefix
+  - **Files**: main.c:1102 (alert file), logger.c:268 (rotation), logger.c:1790 (recovery)
+  - **Credit**: Security code audit finding
+
+**MEDIUM SEVERITY**:
+
+- **Race Condition in Sequence Numbers**: Fixed non-atomic increment in authcheck
+  - **Impact**: Auth integrity violations could have duplicate sequence numbers
+  - **Fix**: New logger_get_next_sequence() API with mutex protection
+  - **Files**: authcheck.c:447, logger.c (new API), logger.h (declaration)
+
+- **Uninitialized Memory in Syslog**: Fixed potential stack memory leak
+  - **Impact**: Syslog could contain garbage data or leak sensitive stack contents
+  - **Fix**: Initialize all char arrays with = {0} (defensive programming)
+  - **Files**: logger.c (all event logging functions)
+  - **Detection**: Valgrind memcheck verified
+
+### Changed
+
+- **Logger API Enhancement**: Added logger_get_next_sequence() for thread-safe sequence increment
+  - Public API for subsystems needing atomic sequence numbers
+  - Deprecation note: logger_get_sequence() should not be used for write operations
+
+### Known Limitations
+
+- **Package Integrity Verification**: The pkg_info.modified field currently only detects
+  package ownership changes, NOT file content modification. Real cryptographic verification
+  against package database (dpkg --verify / rpm -V) is planned for v1.8.0.
+
+  Current behavior:
+  - modified=true: Package name changed OR file lost package ownership
+  - modified=false: Package ownership unchanged (even if content trojaned)
+
+  Mitigation: authcheck still detects files not from packages (from_package=false)
+
 ## [1.7.6] - 2026-02-20
 
 ### Security

@@ -264,17 +264,17 @@ static void rotate_log_file(void)
     rename(rotation_base_path, new_path);
 
     // Open fresh log file with restrictive permissions
-    mode_t old_umask = umask(0077);
-    new_fp = fopen(rotation_base_path, "a");
+    new_fp = safe_fopen(rotation_base_path, "a", 0640);
+    if (!new_fp && errno == ELOOP) {
+        syslog(LOG_CRIT, "SECURITY: Symlink attack detected on log rotation: %s", rotation_base_path);
+    }
     if (new_fp) {
-        chmod(rotation_base_path, 0640);  // Set restrictive permissions
-        umask(old_umask);
         setlinebuf(new_fp);
         log_fp = new_fp;
         bytes_written = 0;
         fprintf(stderr, "Log rotated: %s\n", rotation_base_path);
     } else {
-        umask(old_umask);
+
         fprintf(stderr, "ERROR: Failed to reopen log after rotation: %s\n",
                 strerror(errno));
     }
@@ -596,14 +596,14 @@ close_json:
 
 int logger_log_process_event(const struct process_event *event)
 {
-    char timestamp[64];
-    char hostname_escaped[256 * 6];
-    char comm_escaped[TASK_COMM_LEN * 6];
-    char filename_escaped[MAX_FILENAME_LEN * 6];
-    char cmdline_escaped[MAX_CMDLINE_LEN * 6];
-    char username[USERNAME_MAX];
-    char username_escaped[USERNAME_MAX * 6];
-    char sha256[SHA256_HEX_LEN];
+    char timestamp[64] = {0};
+    char hostname_escaped[256 * 6] = {0};
+    char comm_escaped[TASK_COMM_LEN * 6] = {0};
+    char filename_escaped[MAX_FILENAME_LEN * 6] = {0};
+    char cmdline_escaped[MAX_CMDLINE_LEN * 6] = {0};
+    char username[USERNAME_MAX] = {0};
+    char username_escaped[USERNAME_MAX * 6] = {0};
+    char sha256[SHA256_HEX_LEN] = {0};
     const char *event_type;
 
     if (!log_fp)
@@ -633,7 +633,7 @@ int logger_log_process_event(const struct process_event *event)
 
     // Resolve sudo username if we have sudo_uid from eBPF
     char sudo_user[USERNAME_MAX] = {0};
-    char sudo_user_escaped[USERNAME_MAX * 6];
+    char sudo_user_escaped[USERNAME_MAX * 6] = {0};
 
     if (event->sudo_uid > 0 && enable_resolve_usernames) {
         userdb_resolve(event->sudo_uid, sudo_user, sizeof(sudo_user));
@@ -885,12 +885,12 @@ int logger_log_process_event(const struct process_event *event)
 
 int logger_log_file_event(const struct file_event *event)
 {
-    char timestamp[64];
-    char hostname_escaped[256 * 6];
-    char comm_escaped[TASK_COMM_LEN * 6];
-    char filename_escaped[MAX_FILENAME_LEN * 6];
-    char username[USERNAME_MAX];
-    char username_escaped[USERNAME_MAX * 6];
+    char timestamp[64] = {0};
+    char hostname_escaped[256 * 6] = {0};
+    char comm_escaped[TASK_COMM_LEN * 6] = {0};
+    char filename_escaped[MAX_FILENAME_LEN * 6] = {0};
+    char username[USERNAME_MAX] = {0};
+    char username_escaped[USERNAME_MAX * 6] = {0};
     const char *event_type;
     int ret;
 
@@ -967,7 +967,7 @@ int logger_log_file_event(const struct file_event *event)
     } else {
         process_name = event->filename;  // No slash, use full filename
     }
-    char process_name_escaped[MAX_FILENAME_LEN * 6];
+    char process_name_escaped[MAX_FILENAME_LEN * 6] = {0};
     json_escape(process_name, process_name_escaped, sizeof(process_name_escaped));
     fprintf(log_fp, ",\"process_name\":\"%s\"", process_name_escaped);
 
@@ -995,13 +995,13 @@ int logger_log_file_event(const struct file_event *event)
 
 int logger_log_network_event(const struct network_event *event)
 {
-    char timestamp[64];
-    char hostname_escaped[256 * 6];
-    char comm_escaped[TASK_COMM_LEN * 6];
-    char username[USERNAME_MAX];
-    char username_escaped[USERNAME_MAX * 6];
-    char saddr_str[INET6_ADDRSTRLEN];
-    char daddr_str[INET6_ADDRSTRLEN];
+    char timestamp[64] = {0};
+    char hostname_escaped[256 * 6] = {0};
+    char comm_escaped[TASK_COMM_LEN * 6] = {0};
+    char username[USERNAME_MAX] = {0};
+    char username_escaped[USERNAME_MAX * 6] = {0};
+    char saddr_str[INET6_ADDRSTRLEN] = {0};
+    char daddr_str[INET6_ADDRSTRLEN] = {0};
     const char *event_type;
     int ret;
 
@@ -1095,7 +1095,7 @@ int logger_log_network_event(const struct network_event *event)
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
 
     // Try to get process_name from /proc/<pid>/exe
-    char process_name[PATH_MAX];
+    char process_name[PATH_MAX] = {0};
     bool deleted_exec = false;
     if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name), &deleted_exec)) {
         char process_name_escaped[PATH_MAX * 6];
@@ -1153,14 +1153,14 @@ int logger_log_network_event(const struct network_event *event)
 
 int logger_log_privilege_event(const struct privilege_event *event)
 {
-    char timestamp[64];
-    char hostname_escaped[256 * 6];
-    char comm_escaped[TASK_COMM_LEN * 6];
-    char target_escaped[TASK_COMM_LEN * 6];
-    char old_username[USERNAME_MAX];
-    char new_username[USERNAME_MAX];
-    char old_username_escaped[USERNAME_MAX * 6];
-    char new_username_escaped[USERNAME_MAX * 6];
+    char timestamp[64] = {0};
+    char hostname_escaped[256 * 6] = {0};
+    char comm_escaped[TASK_COMM_LEN * 6] = {0};
+    char target_escaped[TASK_COMM_LEN * 6] = {0};
+    char old_username[USERNAME_MAX] = {0};
+    char new_username[USERNAME_MAX] = {0};
+    char old_username_escaped[USERNAME_MAX * 6] = {0};
+    char new_username_escaped[USERNAME_MAX * 6] = {0};
     const char *event_type;
     int ret;
 
@@ -1232,7 +1232,7 @@ int logger_log_privilege_event(const struct privilege_event *event)
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
 
     // Try to get process_name from /proc/<pid>/exe
-    char process_name[PATH_MAX];
+    char process_name[PATH_MAX] = {0};
     bool deleted_exec = false;
     if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name), &deleted_exec)) {
         char process_name_escaped[PATH_MAX * 6];
@@ -1295,12 +1295,12 @@ int logger_log_privilege_event(const struct privilege_event *event)
 
 int logger_log_security_event(const struct security_event *event)
 {
-    char timestamp[64];
-    char hostname_escaped[256 * 6];
-    char comm_escaped[TASK_COMM_LEN * 6];
-    char filename_escaped[MAX_FILENAME_LEN * 6];
-    char username[USERNAME_MAX];
-    char username_escaped[USERNAME_MAX * 6];
+    char timestamp[64] = {0};
+    char hostname_escaped[256 * 6] = {0};
+    char comm_escaped[TASK_COMM_LEN * 6] = {0};
+    char filename_escaped[MAX_FILENAME_LEN * 6] = {0};
+    char username[USERNAME_MAX] = {0};
+    char username_escaped[USERNAME_MAX * 6] = {0};
     const char *event_type;
     int ret;
 
@@ -1397,7 +1397,7 @@ int logger_log_security_event(const struct security_event *event)
     fprintf(log_fp, ",\"comm\":\"%s\"", comm_escaped);
 
     // Try to get process_name from /proc/<pid>/exe
-    char process_name[PATH_MAX];
+    char process_name[PATH_MAX] = {0};
     bool deleted_exec = false;
     if (get_process_name_from_proc(event->pid, process_name, sizeof(process_name), &deleted_exec)) {
         char process_name_escaped[PATH_MAX * 6];
@@ -1626,12 +1626,12 @@ int logger_log_persistence_event(const struct persistence_event *event)
         "autostart"      // 5
     };
 
-    char timestamp[64];
-    char hostname_escaped[256 * 6];
-    char comm_escaped[TASK_COMM_LEN * 6];
-    char path_escaped[MAX_FILENAME_LEN * 6];
-    char username[USERNAME_MAX];
-    char username_escaped[USERNAME_MAX * 6];
+    char timestamp[64] = {0};
+    char hostname_escaped[256 * 6] = {0};
+    char comm_escaped[TASK_COMM_LEN * 6] = {0};
+    char path_escaped[MAX_FILENAME_LEN * 6] = {0};
+    char username[USERNAME_MAX] = {0};
+    char username_escaped[USERNAME_MAX * 6] = {0};
     int ret;
 
     if (!log_fp)
@@ -1737,6 +1737,15 @@ uint64_t logger_get_sequence(void)
     return seq;
 }
 
+uint64_t logger_get_next_sequence(void)
+{
+    pthread_mutex_lock(&seq_mutex);
+    uint64_t seq = ++event_sequence;
+    event_count++;
+    pthread_mutex_unlock(&seq_mutex);
+    return seq;
+}
+
 unsigned long logger_get_event_count(void)
 {
     unsigned long count;
@@ -1751,7 +1760,7 @@ bool logger_check_file_deleted(void)
     struct stat st;
     uint64_t last_seq;
     unsigned long lost_events;
-    char timestamp[64];
+    char timestamp[64] = {0};
     struct timespec ts;
     struct tm tm_info;
 
@@ -1786,9 +1795,10 @@ bool logger_check_file_deleted(void)
 
     // Try to reopen log file
     const char *log_path = (rotation_base_path[0] != '\0') ? rotation_base_path : "/var/log/linmon/events.json";
-    mode_t old_umask = umask(0027);  // rw-r----- permissions
-    FILE *new_fp = fopen(log_path, "a");
-    umask(old_umask);
+    FILE *new_fp = safe_fopen(log_path, "a", 0640);
+    if (!new_fp && errno == ELOOP) {
+        syslog(LOG_CRIT, "SECURITY: Symlink attack detected on log recovery: %s", log_path);
+    }
 
     if (!new_fp) {
         syslog(LOG_CRIT, "CRITICAL: Failed to reopen log after deletion: %s",
