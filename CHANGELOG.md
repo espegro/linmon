@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-04-17
+
+### Added
+
+- Added official RHEL 10 / Rocky Linux 10 release builds in GitHub Actions
+  - Release workflow now builds and publishes `linmond-rhel10-x86_64.tar.gz`
+  - README and installation guidance updated to include the new download target
+
+### Fixed
+
+- Fixed the Rocky Linux 10 workflow container image
+  - Switched from the non-existent `rockylinux:10` image to `rockylinux/rockylinux:10-ubi`
+  - Validated that the RHEL 10 build job completes successfully in GitHub Actions
+
 ## [1.8.0] - 2026-04-17
 
 ### Security
