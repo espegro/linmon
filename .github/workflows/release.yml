@@ -112,7 +112,7 @@ jobs:
     name: Build on RHEL 10 (Rocky Linux)
     runs-on: ubuntu-latest
     container:
-      image: rockylinux:10
+      image: rockylinux/rockylinux:10-ubi
 
     steps:
       - name: Install Git
