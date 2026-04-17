@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish/update the GitHub release after building artifacts"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -166,6 +172,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: [build-ubuntu, build-rhel9, build-rhel10]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
     runs-on: ubuntu-latest
 
     steps:
@@ -191,46 +198,32 @@ jobs:
         id: version
         run: echo "version=$(cat VERSION)" >> $GITHUB_OUTPUT
 
+      - name: Generate release notes from changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          NOTES_FILE="release-notes.md"
+
+          {
+            echo "# LinMon v${VERSION}"
+            echo
+            awk -v version="$VERSION" '
+              $0 ~ "^## \\[" version "\\]" { in_section = 1; next }
+              in_section && /^## \[/ { exit }
+              in_section { print }
+            ' CHANGELOG.md
+            echo
+            echo "## Downloads"
+            echo
+            echo "- \`linmond-ubuntu-24.04-amd64.tar.gz\`"
+            echo "- \`linmond-rhel9-x86_64.tar.gz\`"
+            echo "- \`linmond-rhel10-x86_64.tar.gz\`"
+          } > "$NOTES_FILE"
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           name: LinMon v${{ steps.version.outputs.version }}
-          body: |
-            # LinMon v${{ steps.version.outputs.version }}
-
-            Linux Activity Monitor - eBPF-based system monitoring
-
-            ## Downloads
-
-            - **Ubuntu 24.04**: `linmond-ubuntu-24.04-amd64.tar.gz`
-            - **RHEL 9 / Rocky Linux 9**: `linmond-rhel9-x86_64.tar.gz`
-            - **RHEL 10 / Rocky Linux 10**: `linmond-rhel10-x86_64.tar.gz`
-
-            ## Installation
-
-            ```bash
-            # Download and extract
-            tar -xzf linmond-*.tar.gz
-            cd linmond
-
-            # Install (requires root)
-            sudo cp linmond /usr/local/sbin/
-            sudo cp linmond.service /etc/systemd/system/
-            sudo cp linmond.logrotate /etc/logrotate.d/linmond
-            sudo mkdir -p /etc/linmon /var/log/linmon
-            sudo cp linmon.conf.example /etc/linmon/linmon.conf
-
-            # Enable and start
-            sudo systemctl daemon-reload
-            sudo systemctl enable --now linmond
-            ```
-
-            ## Requirements
-
-            - Linux kernel >= 5.8 with BTF support
-            - Root privileges or `CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`
-
-            See [README.md](https://github.com/espegro/linmon/blob/main/README.md) for full documentation.
+          body_path: release-notes.md
           files: |
             linmond-ubuntu-24.04-amd64.tar.gz
             linmond-rhel9-x86_64.tar.gz
