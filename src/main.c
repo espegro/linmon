@@ -1287,7 +1287,7 @@ int main(int argc, char **argv)
     //   ✓ Read /proc/<pid>/exe for all users (CAP_SYS_PTRACE)
     //   ✓ Write to /var/log/linmon/events.json (file already open)
     //   ✓ Read from BPF ring buffers (BPF programs already loaded)
-    //   ✓ Read configuration file /etc/linmon/linmon.conf (world-readable)
+    //   ✓ Read configuration file /etc/linmon/linmon.conf (group-readable by linmon)
     //   ✓ Execute stat(), readlink(), open() on /proc (CAP_SYS_PTRACE)
     //
     // WHAT THE DAEMON CANNOT DO AFTER PRIVILEGE DROP:

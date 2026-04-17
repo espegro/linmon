@@ -136,6 +136,31 @@ static void test_safe_fopen_invalid_mode(void) {
     ASSERT_EQ(errno, EINVAL);
 }
 
+static void test_safe_fopen_readonly_rejects_symlink(void) {
+    TEST_CASE("safe_fopen_readonly: rejects symlink (ELOOP)");
+
+    const char *target = "/tmp/linmon_test_ro_target.txt";
+    const char *link = "/tmp/linmon_test_ro_symlink.txt";
+
+    unlink(target);
+    unlink(link);
+
+    FILE *fp_target = fopen(target, "w");
+    ASSERT_TRUE(fp_target != NULL);
+    fprintf(fp_target, "target content\n");
+    fclose(fp_target);
+
+    ASSERT_EQ(symlink(target, link), 0);
+
+    errno = 0;
+    FILE *fp = safe_fopen_readonly(link, NULL);
+    ASSERT_TRUE(fp == NULL);
+    ASSERT_EQ(errno, ELOOP);
+
+    unlink(link);
+    unlink(target);
+}
+
 int main(void) {
     TEST_SUITE("LinMon utils Tests - Safe File Operations");
 
@@ -144,6 +169,7 @@ int main(void) {
     test_safe_fopen_read_mode();
     test_safe_fopen_rejects_symlink();
     test_safe_fopen_invalid_mode();
+    test_safe_fopen_readonly_rejects_symlink();
 
     print_test_summary();
 

@@ -33,3 +33,26 @@ FILE *safe_fopen(const char *path, const char *mode, mode_t perms) {
     }
     return fp;
 }
+
+FILE *safe_fopen_readonly(const char *path, struct stat *st_out)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd == -1)
+        return NULL;
+
+    if (st_out && fstat(fd, st_out) != 0) {
+        int saved_errno = errno;
+        close(fd);
+        errno = saved_errno;
+        return NULL;
+    }
+
+    FILE *fp = fdopen(fd, "r");
+    if (!fp) {
+        int saved_errno = errno;
+        close(fd);
+        errno = saved_errno;
+    }
+
+    return fp;
+}

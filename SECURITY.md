@@ -98,8 +98,8 @@ LinMon validates config file permissions on startup:
 
 **Recommended permissions**:
 ```bash
-sudo chown root:root /etc/linmon/linmon.conf
-sudo chmod 0600 /etc/linmon/linmon.conf
+sudo chown root:linmon /etc/linmon/linmon.conf
+sudo chmod 0640 /etc/linmon/linmon.conf
 ```
 
 ### 3. Immutable Flags (Tamper Protection)
@@ -512,8 +512,8 @@ sudo chmod 0750 /var/cache/linmon
 # 3. Secure config file
 sudo mkdir -p /etc/linmon
 sudo cp linmon.conf /etc/linmon/
-sudo chown root:root /etc/linmon/linmon.conf
-sudo chmod 0600 /etc/linmon/linmon.conf
+sudo chown root:linmon /etc/linmon/linmon.conf
+sudo chmod 0640 /etc/linmon/linmon.conf
 
 # 4. Install binary
 sudo cp build/linmond /usr/local/sbin/

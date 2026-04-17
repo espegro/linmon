@@ -87,13 +87,13 @@ else
     echo -e "${YELLOW}⚠${NC} Config exists, not overwriting: /etc/linmon/linmon.conf"
 fi
 
-chown root:root /etc/linmon/linmon.conf
-chmod 0600 /etc/linmon/linmon.conf
+chown root:linmon /etc/linmon/linmon.conf
+chmod 0640 /etc/linmon/linmon.conf
 
 # Set immutable flag on config (requires root, prevents modification even by root)
 chattr +i /etc/linmon/linmon.conf 2>/dev/null || echo -e "${YELLOW}⚠${NC} Could not set immutable flag (chattr not available or not supported)"
 
-echo -e "${GREEN}✓${NC} Config permissions: root:root, mode: 0600"
+echo -e "${GREEN}✓${NC} Config permissions: root:linmon, mode: 0640"
 
 # 5. Install binary
 echo -e "${YELLOW}[5/8]${NC} Installing binary..."
@@ -146,16 +146,16 @@ echo -e "${YELLOW}[8/8]${NC} Verifying security configuration..."
 
 # Check config file permissions
 CONF_PERM=$(stat -c %a /etc/linmon/linmon.conf)
-if [ "$CONF_PERM" != "600" ]; then
-    echo -e "${RED}✗${NC} Config permissions incorrect: $CONF_PERM (expected 600)"
+if [ "$CONF_PERM" != "640" ]; then
+    echo -e "${RED}✗${NC} Config permissions incorrect: $CONF_PERM (expected 640)"
 else
     echo -e "${GREEN}✓${NC} Config permissions correct"
 fi
 
 # Check config file owner
 CONF_OWNER=$(stat -c %U:%G /etc/linmon/linmon.conf)
-if [ "$CONF_OWNER" != "root:root" ]; then
-    echo -e "${RED}✗${NC} Config owner incorrect: $CONF_OWNER (expected root:root)"
+if [ "$CONF_OWNER" != "root:linmon" ]; then
+    echo -e "${RED}✗${NC} Config owner incorrect: $CONF_OWNER (expected root:linmon)"
 else
     echo -e "${GREEN}✓${NC} Config owner correct"
 fi

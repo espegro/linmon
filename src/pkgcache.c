@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <sys/prctl.h>
+#include <sys/capability.h>
 #include <syslog.h>
 
 #include "pkgcache.h"
@@ -163,6 +165,8 @@ static int try_package_query(const char *query_path, char *buf, size_t buflen)
 	}
 
 	if (pid == 0) {
+		cap_t empty_caps;
+
 		// Child process: execute package manager
 		close(pipefd[0]);  // Close read end
 
@@ -177,6 +181,23 @@ static int try_package_query(const char *query_path, char *buf, size_t buflen)
 		}
 
 		close(pipefd[1]);
+
+		// Child helpers do not need any retained daemon capabilities.
+		if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0)
+			_exit(127);
+
+		empty_caps = cap_init();
+		if (!empty_caps)
+			_exit(127);
+
+		if (cap_set_proc(empty_caps) != 0) {
+			cap_free(empty_caps);
+			_exit(127);
+		}
+		cap_free(empty_caps);
+
+		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+			_exit(127);
 
 		// Execute without shell - direct execve() call
 		if (detected_pkg_manager == PKG_DPKG) {

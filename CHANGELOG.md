@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-17
+
+### Security
+
+- Fixed config loading to open and validate the same file descriptor with `O_NOFOLLOW`
+  - Removes the check-then-open race window for privileged config reads
+  - Rejects symlinked and non-regular config paths explicitly
+  - Added regression coverage for symlink rejection in unit tests
+
+- Fixed retained `CAP_SYS_PTRACE` leaking into package-manager helper processes
+  - `dpkg`/`rpm` child processes now clear ambient and active capabilities before `execve()`
+  - Child helpers also set `PR_SET_NO_NEW_PRIVS` before execution
+
+- Hardened log file reopening and creation
+  - Log targets are now verified as regular files after opening
+  - Existing log files are forced to mode `0640` with `fchmod()`
+
+### Changed
+
+- Updated runtime config permission model to `root:linmon 0640`
+  - Keeps config root-owned and not group-writable
+  - Allows the daemon to reload config safely after dropping privileges
+  - Installation and security documentation updated to match runtime behavior
+
+- Updated unit test build rules for the new secure file-opening helper dependency
+
 ## [1.7.7] - 2026-03-12
 
 ### Security

@@ -201,13 +201,13 @@ sudo ./install.sh
 
 3. **Installs files**:
    - `/usr/local/sbin/linmond` - Binary (mode: `0755`)
-   - `/etc/linmon/linmon.conf` - Config (mode: `0600`, only if doesn't exist)
+   - `/etc/linmon/linmon.conf` - Config (mode: `0640`, owner/group: `root:linmon`, only if doesn't exist)
    - `/etc/systemd/system/linmond.service` - Systemd unit
    - `/etc/logrotate.d/linmond` - Logrotate config
 
 4. **Security verification**:
-   - Checks config file permissions (must be `0600`)
-   - Checks config owner (must be `root:root`)
+   - Checks config file permissions (must be `0640`)
+   - Checks config owner/group (must be `root:linmon`)
    - Warns about world-writable config
 
 5. **Optional post-install**:
@@ -262,11 +262,11 @@ if [ ! -f /etc/linmon/linmon.conf ]; then
 fi
 
 # Secure config file
-sudo chown root:root /etc/linmon/linmon.conf
-sudo chmod 0600 /etc/linmon/linmon.conf
+sudo chown root:linmon /etc/linmon/linmon.conf
+sudo chmod 0640 /etc/linmon/linmon.conf
 ```
 
-**Security Note**: Config file MUST be `0600` and owned by `root:root`. The daemon will refuse to start with insecure permissions.
+**Security Note**: Config file MUST be owned by `root`, must not be group- or world-writable, and should be installed as `root:linmon 0640` so the running daemon can reload it after dropping privileges.
 
 #### 4. Install Systemd Service
 ```bash

@@ -462,6 +462,29 @@ static void test_config_world_writable_rejected(void)
     free_config(&config);
 }
 
+static void test_config_symlink_rejected(void)
+{
+    TEST_CASE("Config: symlinked config file is rejected");
+
+    struct linmon_config config;
+    char target[256];
+    char link[280];
+    const char *content = "monitor_processes = true\n";
+
+    ASSERT_EQ(create_temp_config(content, target, sizeof(target)), 0);
+    snprintf(link, sizeof(link), "%s.link", target);
+    unlink(link);
+    ASSERT_EQ(symlink(target, link), 0);
+
+    int ret = load_config(&config, link);
+    unlink(link);
+    unlink(target);
+
+    ASSERT_EQ(ret, -ELOOP);
+
+    free_config(&config);
+}
+
 int main(void)
 {
     TEST_SUITE("LinMon Config Tests - Parsing and Validation");
@@ -481,6 +504,7 @@ int main(void)
     test_config_uid_range();
     test_config_network_monitoring();
     test_config_world_writable_rejected();
+    test_config_symlink_rejected();
 
     print_test_summary();
 

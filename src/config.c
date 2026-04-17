@@ -10,6 +10,7 @@
 #include <limits.h>
 
 #include "config.h"
+#include "utils.h"
 
 // Default configuration
 static void set_defaults(struct linmon_config *config)
@@ -126,42 +127,49 @@ int load_config(struct linmon_config *config, const char *config_file)
     // Allow test mode to skip ownership checks for unit tests (LINMON_TEST_MODE env var)
     bool test_mode = getenv("LINMON_TEST_MODE") != NULL;
 
-    if (stat(config_file, &st) == 0) {
-        // CRITICAL: Abort if world-writable (any user could modify config)
-        if (st.st_mode & S_IWOTH) {
-            fprintf(stderr, "CRITICAL: Config file is world-writable: %s\n", config_file);
-            return -EPERM;  // Permission denied - refuse to use insecure config
-        }
-
-        if (!test_mode) {
-            // CRITICAL: Abort if not root-owned
-            // Config is read before privilege drop and can control log file path,
-            // which is opened/chmod'd as root. Non-root ownership is privilege escalation vector.
-            if (st.st_uid != 0) {
-                fprintf(stderr, "CRITICAL: Config file not owned by root (uid=%d): %s\n",
-                        st.st_uid, config_file);
-                fprintf(stderr, "Fix with: chown root:root %s\n", config_file);
-                return -EPERM;
-            }
-
-            // CRITICAL: Abort if group-writable
-            // Group-writable config allows any group member to modify settings.
-            // Since config controls log file path and is read as root, this is unsafe.
-            if (st.st_mode & S_IWGRP) {
-                fprintf(stderr, "CRITICAL: Config file is group-writable: %s\n", config_file);
-                fprintf(stderr, "Fix with: chmod 0600 %s\n", config_file);
-                return -EPERM;
-            }
-        }
-    }
-
-    fp = fopen(config_file, "r");
+    fp = safe_fopen_readonly(config_file, &st);
     if (!fp) {
         // Config file not found is not an error - use defaults
         // This allows daemon to run with compiled-in defaults if no config exists
         if (errno == ENOENT)
             return -ENOENT;
         return -errno;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        fclose(fp);
+        fprintf(stderr, "CRITICAL: Config path is not a regular file: %s\n", config_file);
+        return -EPERM;
+    }
+
+    // CRITICAL: Abort if world-writable (any user could modify config)
+    if (st.st_mode & S_IWOTH) {
+        fclose(fp);
+        fprintf(stderr, "CRITICAL: Config file is world-writable: %s\n", config_file);
+        return -EPERM;  // Permission denied - refuse to use insecure config
+    }
+
+    if (!test_mode) {
+        // CRITICAL: Abort if not root-owned
+        // Config is read before privilege drop and can control log file path,
+        // which is opened/chmod'd as root. Non-root ownership is privilege escalation vector.
+        if (st.st_uid != 0) {
+            fclose(fp);
+            fprintf(stderr, "CRITICAL: Config file not owned by root (uid=%d): %s\n",
+                    st.st_uid, config_file);
+            fprintf(stderr, "Fix with: chown root:linmon %s\n", config_file);
+            return -EPERM;
+        }
+
+        // CRITICAL: Abort if group-writable
+        // Group-writable config allows any group member to modify settings.
+        // Since config controls log file path and is read as root, this is unsafe.
+        if (st.st_mode & S_IWGRP) {
+            fclose(fp);
+            fprintf(stderr, "CRITICAL: Config file is group-writable: %s\n", config_file);
+            fprintf(stderr, "Fix with: chmod 0640 %s\n", config_file);
+            return -EPERM;
+        }
     }
 
     // Parse config file line by line

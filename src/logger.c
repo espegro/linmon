@@ -60,6 +60,8 @@ static const unsigned long ROTATION_CHECK_INTERVAL = 4096;  // Check every 4KB w
 // vulnerabilities (CVE-2024-XXXX - log file created with weak permissions).
 FILE *logger_open_file_secure(const char *log_file)
 {
+    struct stat st;
+
     if (!log_file) {
         errno = EINVAL;
         return NULL;
@@ -84,6 +86,26 @@ FILE *logger_open_file_secure(const char *log_file)
 
     // Restore original umask (don't affect other operations)
     umask(old_umask);
+
+    if (fstat(fileno(fp), &st) != 0) {
+        int saved_errno = errno;
+        fclose(fp);
+        errno = saved_errno;
+        return NULL;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        fclose(fp);
+        errno = EPERM;
+        return NULL;
+    }
+
+    if (fchmod(fileno(fp), 0640) != 0) {
+        int saved_errno = errno;
+        fclose(fp);
+        errno = saved_errno;
+        return NULL;
+    }
 
     // Set line buffering
     setlinebuf(fp);

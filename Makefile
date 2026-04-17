@@ -103,7 +103,7 @@ $(BUILD_DIR)/$(DAEMON): $(DAEMON_OBJECTS) | $(BUILD_DIR)
 # Test targets
 
 # Compile test for filter.c
-$(TEST_BIN_DIR)/test_filter: $(TEST_DIR)/test_filter.c $(SRC_DIR)/filter.c $(SRC_DIR)/config.c | $(TEST_BIN_DIR)
+$(TEST_BIN_DIR)/test_filter: $(TEST_DIR)/test_filter.c $(SRC_DIR)/filter.c $(SRC_DIR)/config.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
 	$(CC) $(TEST_CFLAGS) $^ -o $@
 
 # Compile test for logger.c (only tests json_escape function, duplicated in test)
@@ -111,7 +111,7 @@ $(TEST_BIN_DIR)/test_logger: $(TEST_DIR)/test_logger.c | $(TEST_BIN_DIR)
 	$(CC) $(TEST_CFLAGS) $< -o $@
 
 # Compile test for config.c
-$(TEST_BIN_DIR)/test_config: $(TEST_DIR)/test_config.c $(SRC_DIR)/config.c | $(TEST_BIN_DIR)
+$(TEST_BIN_DIR)/test_config: $(TEST_DIR)/test_config.c $(SRC_DIR)/config.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
 	$(CC) $(TEST_CFLAGS) $^ -o $@
 
 # Compile test for procfs.c
