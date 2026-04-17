@@ -122,6 +122,20 @@ cd linmond-rhel9-x86_64
 sudo restorecon -Rv /usr/local/sbin/linmond /var/log/linmon /var/cache/linmon
 ```
 
+**RHEL 10 / Rocky Linux 10**:
+```bash
+# Download latest release
+wget https://github.com/espegro/linmon/releases/latest/download/linmond-rhel10-x86_64.tar.gz
+
+# Extract and install (same steps as Ubuntu)
+tar -xzf linmond-rhel10-x86_64.tar.gz
+cd linmond-rhel10-x86_64
+# ... (same installation steps as above)
+
+# IMPORTANT: If SELinux is enabled, fix contexts
+sudo restorecon -Rv /usr/local/sbin/linmond /var/log/linmon /var/cache/linmon
+```
+
 > **Note**: On RHEL/Rocky with SELinux enabled, the binary needs correct SELinux contexts. The installer handles this automatically, but if you encounter issues, see **[INSTALL.md](INSTALL.md)** SELinux section.
 
 ### Build from Source

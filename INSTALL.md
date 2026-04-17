@@ -35,7 +35,7 @@ ls -l /sys/kernel/btf/vmlinux
 | Ubuntu 24.04 | 6.8+ | ✅ Fully supported | All features work |
 | Ubuntu 22.04 | 5.15+ | ✅ Fully supported | All features work |
 | RHEL 9 / Rocky 9 / AlmaLinux 9 | 5.14+ | ✅ Fully supported | Some syscall tracepoints may fall back to kprobes |
-| RHEL 10 / Rocky 10 | 6.x+ | ✅ Expected to work | Newer kernel, full support expected |
+| RHEL 10 / Rocky 10 | 6.x+ | ✅ Release build available | Newer kernel, full support expected |
 | Debian 12+ | 6.1+ | ✅ Should work | Similar to Ubuntu |
 
 ## Dependencies

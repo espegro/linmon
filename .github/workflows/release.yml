@@ -108,9 +108,64 @@ jobs:
           name: linmond-rhel9-x86_64
           path: linmond-rhel9-x86_64.tar.gz
 
+  build-rhel10:
+    name: Build on RHEL 10 (Rocky Linux)
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:10
+
+    steps:
+      - name: Install Git
+        run: |
+          dnf install -y git
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Enable CRB repository
+        run: |
+          dnf install -y 'dnf-command(config-manager)'
+          dnf config-manager --set-enabled crb
+
+      - name: Install dependencies
+        run: |
+          dnf install -y \
+            clang \
+            llvm \
+            elfutils-libelf-devel \
+            libbpf-devel \
+            bpftool \
+            openssl-devel \
+            libcap-devel \
+            zlib-devel \
+            make \
+            kernel-devel
+
+      - name: Build
+        run: |
+          echo "Using pre-generated vmlinux.h from repository"
+          make clean && make
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp build/linmond dist/
+          cp linmond.service dist/
+          cp linmond.logrotate dist/
+          cp linmon.conf.example dist/
+          cp README.md dist/
+          cd dist
+          tar -czf ../linmond-rhel10-x86_64.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linmond-rhel10-x86_64
+          path: linmond-rhel10-x86_64.tar.gz
+
   create-release:
     name: Create GitHub Release
-    needs: [build-ubuntu, build-rhel9]
+    needs: [build-ubuntu, build-rhel9, build-rhel10]
     runs-on: ubuntu-latest
 
     steps:
@@ -126,6 +181,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: linmond-rhel9-x86_64
+
+      - name: Download RHEL 10 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linmond-rhel10-x86_64
 
       - name: Read VERSION file
         id: version
@@ -144,6 +204,7 @@ jobs:
 
             - **Ubuntu 24.04**: `linmond-ubuntu-24.04-amd64.tar.gz`
             - **RHEL 9 / Rocky Linux 9**: `linmond-rhel9-x86_64.tar.gz`
+            - **RHEL 10 / Rocky Linux 10**: `linmond-rhel10-x86_64.tar.gz`
 
             ## Installation
 
@@ -173,5 +234,6 @@ jobs:
           files: |
             linmond-ubuntu-24.04-amd64.tar.gz
             linmond-rhel9-x86_64.tar.gz
+            linmond-rhel10-x86_64.tar.gz
           draft: false
           prerelease: false
