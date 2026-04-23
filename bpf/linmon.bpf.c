@@ -112,8 +112,8 @@ static __always_inline bool should_monitor_uid(__u32 uid)
     if (uid < cfg->min_uid)
         return false;
 
-    // Check max_uid (0 = no limit)
-    if (cfg->max_uid > 0 && uid > cfg->max_uid)
+    // Check max_uid (0xFFFFFFFF = no limit)
+    if (cfg->max_uid < 0xFFFFFFFF && uid > cfg->max_uid)
         return false;
 
     return true;

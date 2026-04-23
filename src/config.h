@@ -6,6 +6,10 @@
 #define __LINMON_CONFIG_H
 
 #include <stdbool.h>
+#include <limits.h>
+
+// UID filtering sentinels
+#define UID_NO_LIMIT UINT_MAX  // Explicit sentinel for "no upper limit" (instead of magic 0)
 
 struct linmon_config {
     char *log_file;

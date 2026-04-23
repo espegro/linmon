@@ -560,8 +560,11 @@ static int parse_cidr(const char *cidr_str, struct network_cidr *out)
     }
 
     // Calculate mask (in network byte order, then convert to host byte order)
+    // Handle edge cases: prefix_len=0 → mask=0, prefix_len=32 → mask=0xFFFFFFFF
     if (prefix_len == 0) {
         mask = 0;
+    } else if (prefix_len == 32) {
+        mask = 0xFFFFFFFF;  // Explicit to avoid UB from (32 - 32) = 0 bit shift
     } else {
         mask = htonl(~0U << (32 - prefix_len));
     }

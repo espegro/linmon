@@ -813,34 +813,41 @@ int logger_log_process_event(const struct process_event *event)
 
     if (need_syslog && event->type == EVENT_PROCESS_EXEC) {
         size_t pos = 0;
+        bool truncated = false;  // Track if any append was truncated
 
         // Base event info: seq, hostname, user, process
-        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                     "%s: seq=%lu host=%s user=%s(%u)",
-                     event_type, seq, hostname, username, event->uid);
+        if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                          "%s: seq=%lu host=%s user=%s(%u)",
+                          event_type, seq, hostname, username, event->uid))
+            truncated = true;
 
         // sudo tracking (if applicable)
         if (event->sudo_uid > 0 && sudo_user[0]) {
-            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                         " sudo=%s(%u)", sudo_user, event->sudo_uid);
+            if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                              " sudo=%s(%u)", sudo_user, event->sudo_uid))
+                truncated = true;
         }
 
         // TTY and process hierarchy
         if (event->tty[0]) {
-            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                         " tty=%s", event->tty);
+            if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                              " tty=%s", event->tty))
+                truncated = true;
         }
-        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                     " pid=%u ppid=%u sid=%u", event->pid, event->ppid, event->sid);
+        if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                          " pid=%u ppid=%u sid=%u", event->pid, event->ppid, event->sid))
+            truncated = true;
 
         // Process name and comm
-        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                     " comm=%s", event->comm);
+        if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                          " comm=%s", event->comm))
+            truncated = true;
 
         // File path
         if (event->filename[0]) {
-            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                         " file=%s", event->filename);
+            if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                              " file=%s", event->filename))
+                truncated = true;
         }
 
         // Package info (re-lookup since pkg was scoped)
@@ -848,41 +855,53 @@ int logger_log_process_event(const struct process_event *event)
             struct pkg_info pkg;
             if (pkgcache_lookup(event->filename, &pkg) == 0) {
                 if (pkg.from_package && pkg.package[0]) {
-                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                                 " pkg=%s", pkg.package);
+                    if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                      " pkg=%s", pkg.package))
+                        truncated = true;
                     if (pkg.modified) {
-                        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                                     " modified=yes");
+                        if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                          " modified=yes"))
+                            truncated = true;
                     }
                 } else {
-                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos, " pkg=none");
+                    if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos, " pkg=none"))
+                        truncated = true;
                 }
             }
         }
 
         // SHA256 (abbreviated for syslog)
         if (sha256[0]) {
-            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                         " sha256=%.16s", sha256);  // First 16 chars
+            if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                              " sha256=%.16s", sha256))  // First 16 chars
+                truncated = true;
         }
 
         // Container info (sparse)
         if (containerinfo_is_in_container(event->pid_ns, event->mnt_ns, event->net_ns)) {
             struct container_info cinfo;
             if (containerinfo_get(event->pid, &cinfo)) {
-                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                             " container=%s", container_runtime_name(&cinfo));
+                if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                  " container=%s", container_runtime_name(&cinfo)))
+                    truncated = true;
                 if (cinfo.id[0]) {
-                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                                 " cid=%.12s", cinfo.id);  // Docker-style short ID
+                    if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                      " cid=%.12s", cinfo.id))  // Docker-style short ID
+                        truncated = true;
                 }
             }
         }
 
         // Command line (last, can be long - use escaped version)
         if (event->cmdline[0]) {
-            syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                         " cmd=\"%s\"", cmdline_escaped);
+            if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                              " cmd=\"%s\"", cmdline_escaped))
+                truncated = true;
+        }
+
+        // Add truncation marker if buffer was full
+        if (truncated) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos, " [TRUNCATED]");
         }
     } else if (need_syslog) {
         // Process exit - simpler format
@@ -1569,23 +1588,28 @@ int logger_log_security_event(const struct security_event *event)
 
     if (need_syslog) {
         size_t pos = 0;
-        syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                     "SECURITY: seq=%lu type=%s host=%s user=%s(%u) pid=%u comm=%s",
-                     seq, event_type, hostname, username, event->uid,
-                     event->pid, event->comm);
+        bool truncated = false;  // Track if any append was truncated
+
+        if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                          "SECURITY: seq=%lu type=%s host=%s user=%s(%u) pid=%u comm=%s",
+                          seq, event_type, hostname, username, event->uid,
+                          event->pid, event->comm))
+            truncated = true;
 
         // Add event-specific critical fields (sparse - only relevant fields per type)
         switch (event->type) {
         case EVENT_SECURITY_PTRACE:
             if (event->target_pid) {
-                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                             " target_pid=%u", event->target_pid);
+                if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                  " target_pid=%u", event->target_pid))
+                    truncated = true;
             }
             break;
         case EVENT_SECURITY_MEMFD:
             if (event->filename[0]) {  // memfd_name is stored in filename field
-                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                             " memfd=%s", event->filename);
+                if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                  " memfd=%s", event->filename))
+                    truncated = true;
             }
             break;
         case EVENT_SECURITY_CRED_READ:
@@ -1603,11 +1627,13 @@ int logger_log_security_event(const struct security_event *event)
                 case 7: cred_type = "ssh_authorized_keys"; break;
                 case 8: cred_type = "ssh_user_config"; break;
                 }
-                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                             " cred_file=%s", cred_type);
+                if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                  " cred_file=%s", cred_type))
+                    truncated = true;
                 if (event->filename[0]) {  // Full path
-                    syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                                 " path=%s", event->filename);
+                    if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                      " path=%s", event->filename))
+                        truncated = true;
                 }
             }
             break;
@@ -1615,12 +1641,18 @@ int logger_log_security_event(const struct security_event *event)
         case EVENT_SECURITY_SUID:
         case EVENT_RAW_DISK_ACCESS:
             if (event->filename[0]) {
-                syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
-                             " file=%s", event->filename);
+                if (!syslog_append(syslog_buf, sizeof(syslog_buf), &pos,
+                                  " file=%s", event->filename))
+                    truncated = true;
             }
             break;
         default:
             break;
+        }
+
+        // Add truncation marker if buffer was full
+        if (truncated) {
+            syslog_append(syslog_buf, sizeof(syslog_buf), &pos, " [TRUNCATED]");
         }
     }
 
@@ -1702,8 +1734,9 @@ int logger_log_persistence_event(const struct persistence_event *event)
 
     // Bounds check: persistence_type comes from eBPF and must be validated
     // Array has 6 elements (indices 0-5), anything else is malformed data
+    // persistence_type is __u8 (unsigned), so >= 0 is always true
     const char *persistence_type_str = "unknown";
-    if (event->persistence_type > 0 && event->persistence_type <= 5) {
+    if (event->persistence_type <= 5) {
         persistence_type_str = persistence_names[event->persistence_type];
     }
     fprintf(log_fp, ",\"persistence_type\":\"%s\"", persistence_type_str);

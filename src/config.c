@@ -30,8 +30,8 @@ static void set_defaults(struct linmon_config *config)
     config->monitor_udp = false;  // Default: off (can be very noisy)
     config->monitor_vsock = false;  // Default: off (VM/container communication)
     config->verbosity = 1;
-    config->min_uid = 0;     // Default: monitor all users including root
-    config->max_uid = 0;     // 0 = no limit
+    config->min_uid = 0;          // Default: monitor all users including root
+    config->max_uid = UID_NO_LIMIT;  // Explicit sentinel: no upper limit (not magic 0)
     config->require_tty = false;       // Default: log all processes (GUI + terminal)
     config->ignore_threads = false;    // Default: log both processes and threads
     config->capture_cmdline = true;
