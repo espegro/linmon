@@ -85,7 +85,9 @@ jobs:
             linux-tools-generic \
             libssl-dev \
             libcap-dev \
-            zlib1g-dev
+            zlib1g-dev \
+            make \
+            gcc
 
       - name: Build
         run: |
