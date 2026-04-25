@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-04-25
+
+### Changed
+
+- Verified compatibility with Ubuntu 26.04 LTS (Resolute) with Linux kernel 7.0.0
+  - All eBPF programs load successfully (23/24 - vsock requires module load)
+  - Full tracepoint support with modern eBPF verifier
+  - Confirmed process execution, network, privilege, and security event monitoring
+  - Production-ready on Ubuntu 26.04 with kernel 7.0.0-14-generic
+
+## [1.8.2] - 2026-04-23
+
+### Security
+
+- Fixed CIDR parsing undefined behavior for `/32` prefix edge case
+  - Added explicit handling to prevent undefined bit shift behavior
+  - Ensures stable network filtering for single-host CIDR blocks
+
+- Replaced magic value `0` with explicit `UID_NO_LIMIT` sentinel for UID ranges
+  - `max_uid` now uses `UINT_MAX` instead of `0` for "no limit" semantics
+  - Eliminates ambiguity between `min_uid=0` (monitor root) and `max_uid=0` (unlimited)
+  - Improves configuration clarity and prevents misinterpretation
+
+- Added truncation tracking to syslog event formatting
+  - Appends `[TRUNCATED]` marker when syslog buffer overflows
+  - Ensures operators can detect incomplete security event logs
+  - Previously silent truncation now explicitly flagged
+
+- Fixed off-by-one error in eBPF persistence type validation
+  - Correctly validates full range `[0-5]` instead of `[1-5]`
+  - Prevents rejection of valid `persistence_type=0` events
+
 ## [1.8.1] - 2026-04-17
 
 ### Added
