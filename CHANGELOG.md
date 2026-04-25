@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-04-25
+
+### Added
+
+- Added Ubuntu 26.04 LTS release build in GitHub Actions
+  - Release workflow now builds and publishes `linmond-ubuntu-26.04-amd64.tar.gz`
+  - Provides native binary for Ubuntu 26.04 (Resolute) with kernel 7.0.0+
+  - All four release targets now available: Ubuntu 24.04, Ubuntu 26.04, RHEL 9, RHEL 10
+
 ## [1.8.3] - 2026-04-25
 
 ### Changed

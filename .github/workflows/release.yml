@@ -59,6 +59,56 @@ jobs:
           name: linmond-ubuntu-24.04-amd64
           path: linmond-ubuntu-24.04-amd64.tar.gz
 
+  build-ubuntu-2604:
+    name: Build on Ubuntu 26.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+
+    steps:
+      - name: Install Git and dependencies
+        run: |
+          apt-get update
+          apt-get install -y git
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            clang \
+            llvm \
+            libelf-dev \
+            libbpf-dev \
+            linux-tools-generic \
+            libssl-dev \
+            libcap-dev \
+            zlib1g-dev
+
+      - name: Build
+        run: |
+          echo "Using pre-generated vmlinux.h from repository"
+          make clean && make
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp build/linmond dist/
+          cp linmond.service dist/
+          cp linmond.logrotate dist/
+          cp linmon.conf.example dist/
+          cp README.md dist/
+          cd dist
+          tar -czf ../linmond-ubuntu-26.04-amd64.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linmond-ubuntu-26.04-amd64
+          path: linmond-ubuntu-26.04-amd64.tar.gz
+
   build-rhel9:
     name: Build on RHEL 9 (Rocky Linux)
     runs-on: ubuntu-latest
@@ -171,7 +221,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build-ubuntu, build-rhel9, build-rhel10]
+    needs: [build-ubuntu, build-ubuntu-2604, build-rhel9, build-rhel10]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
     runs-on: ubuntu-latest
 
@@ -179,12 +229,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download Ubuntu artifact
+      - name: Download Ubuntu 24.04 artifact
         uses: actions/download-artifact@v4
         with:
           name: linmond-ubuntu-24.04-amd64
 
-      - name: Download RHEL artifact
+      - name: Download Ubuntu 26.04 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linmond-ubuntu-26.04-amd64
+
+      - name: Download RHEL 9 artifact
         uses: actions/download-artifact@v4
         with:
           name: linmond-rhel9-x86_64
@@ -215,6 +270,7 @@ jobs:
             echo "## Downloads"
             echo
             echo "- \`linmond-ubuntu-24.04-amd64.tar.gz\`"
+            echo "- \`linmond-ubuntu-26.04-amd64.tar.gz\`"
             echo "- \`linmond-rhel9-x86_64.tar.gz\`"
             echo "- \`linmond-rhel10-x86_64.tar.gz\`"
           } > "$NOTES_FILE"
@@ -226,6 +282,7 @@ jobs:
           body_path: release-notes.md
           files: |
             linmond-ubuntu-24.04-amd64.tar.gz
+            linmond-ubuntu-26.04-amd64.tar.gz
             linmond-rhel9-x86_64.tar.gz
             linmond-rhel10-x86_64.tar.gz
           draft: false
