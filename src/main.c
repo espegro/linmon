@@ -512,7 +512,8 @@ static int update_bpf_config(int config_map_fd, const struct linmon_config *conf
         __u8 ignore_threads;
     } bpf_config = {
         .min_uid = config->min_uid,
-        .max_uid = config->max_uid,
+        // Convert legacy max_uid=0 to UID_NO_LIMIT (0xFFFFFFFF) for eBPF
+        .max_uid = (config->max_uid == 0) ? UID_NO_LIMIT : config->max_uid,
         .capture_cmdline = config->capture_cmdline ? 1 : 0,
         .require_tty = config->require_tty ? 1 : 0,
         .ignore_threads = config->ignore_threads ? 1 : 0,

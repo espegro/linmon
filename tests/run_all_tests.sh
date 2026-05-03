@@ -73,6 +73,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Run all tests
+run_test "$SCRIPT_DIR/test_uid_filtering.sh" "UID Filtering and Event Consistency"
 run_test "$SCRIPT_DIR/test_ssh_keys.sh" "SSH Key Detection (T1552.004, T1098.004)"
 run_test "$SCRIPT_DIR/test_suid.sh" "SUID/SGID Manipulation (T1548.001)"
 run_test "$SCRIPT_DIR/test_persistence.sh" "Persistence Mechanisms (T1053, T1547)"

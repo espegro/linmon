@@ -1242,11 +1242,19 @@ int logger_log_privilege_event(const struct privilege_event *event)
 
     pthread_mutex_lock(&log_mutex);
 
+    // Log uid field (use old_uid for consistency with other event types)
     fprintf(log_fp,
             "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"%s\",\"pid\":%u,\"ppid\":%u,"
-            "\"sid\":%u,\"pgid\":%u,\"old_uid\":%u",
+            "\"sid\":%u,\"pgid\":%u,\"uid\":%u",
             seq, timestamp, hostname_escaped, event_type, event->pid, event->ppid,
             event->sid, event->pgid, event->old_uid);
+
+    if (enable_resolve_usernames) {
+        fprintf(log_fp, ",\"username\":\"%s\"", old_username_escaped);
+    }
+
+    // Now log the privilege change details
+    fprintf(log_fp, ",\"old_uid\":%u", event->old_uid);
 
     if (enable_resolve_usernames) {
         fprintf(log_fp, ",\"old_username\":\"%s\"", old_username_escaped);

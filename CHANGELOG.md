@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-05-03
+
+### Fixed
+
+- **CRITICAL**: Fixed UID filtering bug where `max_uid=0` filtered out all non-root users
+  - **Root cause**: Incomplete refactoring in v1.8.2 security audit commit
+  - Config parsing was updated to use `UID_NO_LIMIT` sentinel, but BPF map update was not
+  - `update_bpf_config()` sent raw `max_uid=0` to eBPF instead of `0xFFFFFFFF`
+  - eBPF check `if (max_uid < 0xFFFFFFFF && uid > max_uid)` filtered all UIDs > 0
+  - **Impact**: Users with default config (`max_uid=0`) saw NO events from non-root users
+  - **Fix**: Convert `max_uid=0` to `UID_NO_LIMIT` (0xFFFFFFFF) in `update_bpf_config()`
+  - **File**: `src/main.c:515`
+
+- Fixed missing `uid` field in privilege events (priv_setuid, priv_setgid, priv_sudo)
+  - Events only had `old_uid`/`new_uid`, breaking consistency with other event types
+  - Added `uid` and `username` fields (using `old_uid` as canonical user)
+  - Improves SIEM parsing and jq queries (`select(.uid == 1000)` now works for all events)
+  - **File**: `src/logger.c:1245-1260`
+
+### Added
+
+- Integration test `tests/test_uid_filtering.sh` to prevent UID filtering regressions
+  - Verifies `max_uid=0` does not filter non-root users
+  - Verifies privilege events have `uid` field
+  - Verifies root events are captured
+  - Added to test suite in `tests/run_all_tests.sh`
+
+### Technical Details
+
+**Why this wasn't caught earlier:**
+- Unit tests only verify config **parsing**, not BPF map communication
+- No integration tests verified actual eBPF filtering behavior
+- Bug introduced by incomplete refactoring across 3 files in one commit
+
+**Affected versions:**
+- v1.8.2 through v1.8.4 (3 weeks, 2026-04-23 to 2026-05-03)
+- v1.8.0 and v1.8.1 NOT affected (used old `max_uid > 0` logic)
+- All versions before v1.8.0 NOT affected
+
+**Upgrade notes:**
+- Existing installations with `max_uid=0` will immediately start logging non-root events after upgrade
+- This is expected behavior - no config changes needed
+- If you were working around the bug by setting `max_uid=4294967295`, you can now use `max_uid=0`
+
 ## [1.8.4] - 2026-04-25
 
 ### Added
