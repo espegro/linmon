@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.8] - 2026-05-14
+
+### Fixed
+
+- Fixed logger initialization under systemd hardening when the log file is owned by `linmon`.
+- Ensured installation creates `/var/log/linmon/events.json` with `linmon:linmon` ownership and `0640` permissions before daemon restart.
+
 ## [1.8.7] - 2026-05-14
 
 ### Fixed

@@ -44,8 +44,10 @@ fi
 # 2. Create log directory with proper permissions
 echo -e "${YELLOW}[2/8]${NC} Creating log directory..."
 mkdir -p /var/log/linmon
+touch /var/log/linmon/events.json
 chown -R linmon:linmon /var/log/linmon
 chmod 0750 /var/log/linmon
+chmod 0640 /var/log/linmon/events.json
 
 # Fix SELinux context for log directory (RHEL/Rocky/Fedora)
 if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
