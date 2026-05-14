@@ -289,6 +289,50 @@ static int prepare_capabilities(void)
     return 0;
 }
 
+static int retain_runtime_capabilities(void)
+{
+    cap_t caps;
+    cap_value_t keep_caps[1] = { CAP_SYS_PTRACE };
+    int ret;
+
+    caps = cap_init();
+    if (!caps) {
+        fprintf(stderr, "Failed to initialize final capability set: %s\n", strerror(errno));
+        return -1;
+    }
+
+    ret = cap_set_flag(caps, CAP_PERMITTED, 1, keep_caps, CAP_SET);
+    if (ret) {
+        fprintf(stderr, "Failed to set final permitted capabilities: %s\n", strerror(errno));
+        cap_free(caps);
+        return -1;
+    }
+
+    ret = cap_set_flag(caps, CAP_EFFECTIVE, 1, keep_caps, CAP_SET);
+    if (ret) {
+        fprintf(stderr, "Failed to set final effective capabilities: %s\n", strerror(errno));
+        cap_free(caps);
+        return -1;
+    }
+
+    ret = cap_set_flag(caps, CAP_INHERITABLE, 1, keep_caps, CAP_SET);
+    if (ret) {
+        fprintf(stderr, "Failed to set final inheritable capabilities: %s\n", strerror(errno));
+        cap_free(caps);
+        return -1;
+    }
+
+    ret = cap_set_proc(caps);
+    if (ret) {
+        fprintf(stderr, "Failed to apply final capability set: %s\n", strerror(errno));
+        cap_free(caps);
+        return -1;
+    }
+
+    cap_free(caps);
+    return 0;
+}
+
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const __u32 *type_ptr = data;
@@ -1465,41 +1509,14 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
-        // STEP 9: Drop CAP_SETUID and CAP_SETGID from capability sets
+        // STEP 9: Replace the inherited root capability set with the runtime minimum
         //
-        // Why drop these:
-        //   - CAP_SETUID allows changing UID (even back to root)
-        //   - CAP_SETGID allows changing GID
-        //   - These would allow regaining privileges (security violation)
-        //
-        // Why drop AFTER setuid():
-        //   - We needed CAP_SETUID to call setuid() above
-        //   - Now that we're running as linmon user, we don't need it anymore
-        //
-        // Final capability set after this:
-        //   - AMBIENT: CAP_SYS_PTRACE
-        //   - PERMITTED: CAP_SYS_PTRACE (CAP_SETUID/CAP_SETGID cleared)
-        //   - EFFECTIVE: CAP_SYS_PTRACE (CAP_SETUID/CAP_SETGID cleared)
-        //   - INHERITABLE: CAP_SYS_PTRACE
-        //
-        // Security property: Cannot regain root or change UID/GID ever again
-        cap_t caps = cap_get_proc();
-        if (caps) {
-            cap_value_t drop_caps[2] = { CAP_SETUID, CAP_SETGID };
-
-            // Clear from PERMITTED (removes from superset of allowed capabilities)
-            cap_set_flag(caps, CAP_PERMITTED, 2, drop_caps, CAP_CLEAR);
-
-            // Clear from EFFECTIVE (removes from active capabilities)
-            cap_set_flag(caps, CAP_EFFECTIVE, 2, drop_caps, CAP_CLEAR);
-
-            if (cap_set_proc(caps) != 0) {
-                // This is a warning, not a critical error
-                // Even if this fails, we can't regain root without CAP_SETUID
-                fprintf(stderr, "Warning: Failed to drop SETUID/SETGID capabilities: %s\n",
-                        strerror(errno));
-            }
-            cap_free(caps);
+        // The service unit may grant root a broader bounding set so startup can
+        // load BPF programs and open linmon-owned log/cache paths. After UID/GID
+        // drop, discard everything except CAP_SYS_PTRACE.
+        if (retain_runtime_capabilities() != 0) {
+            fprintf(stderr, "CRITICAL: Failed to restrict runtime capabilities\n");
+            goto cleanup;
         }
 
         // STEP 10: Verify cannot regain root - PARANOID SECURITY CHECK

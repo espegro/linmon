@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.7] - 2026-05-14
+
+### Fixed
+
+- Fixed RHEL 9 systemd startup after ownership migration by allowing root to open linmon-owned log/cache paths before privilege dropping.
+- Restricted the post-drop runtime capability set to only `CAP_SYS_PTRACE`, preventing startup-only capabilities from remaining after switching to the `linmon` user.
+
 ## [1.8.6] - 2026-05-14
 
 ### Fixed
