@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-05-14
+
+### Fixed
+
+- Fixed RHEL 9 syscall tracepoint fallback handling so kprobe fallbacks read syscall arguments correctly on syscall-wrapper kernels.
+- Reduced noisy expected libbpf tracepoint permission messages and added explicit fallback attach logging.
+- Added missing raw disk access monitor attachment.
+- Updated systemd capability bounding set documentation and service unit for the daemon's BPF load and privilege-drop flow.
+- Fixed unit-test regressions around `UID_NO_LIMIT` and `/proc/<pid>/cmdline` buffer termination.
+
 ## [1.8.5] - 2026-05-03
 
 ### Fixed

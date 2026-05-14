@@ -22,6 +22,7 @@ bool procfs_read_cmdline(pid_t pid, char *buf, size_t max_len)
 
     // Initialize buffer
     buf[0] = '\0';
+    buf[max_len - 1] = '\0';
 
     // Build path to /proc/<pid>/cmdline
     snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);

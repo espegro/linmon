@@ -53,7 +53,7 @@ static void test_config_defaults(void)
     ASSERT_TRUE(config.resolve_usernames);
     ASSERT_TRUE(config.hash_binaries);
     ASSERT_EQ(config.min_uid, 0);
-    ASSERT_EQ(config.max_uid, 0);
+    ASSERT_EQ(config.max_uid, UID_NO_LIMIT);
     ASSERT_EQ(config.verbosity, 1);
     ASSERT_EQ(config.log_rotate_count, 10);
     ASSERT_EQ(config.log_rotate_size, 100 * 1024 * 1024);

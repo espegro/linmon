@@ -10,6 +10,20 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+#if defined(__TARGET_ARCH_x86)
+#define SYSCALL_KPROBE(name) SEC("kprobe/__x64_sys_" #name)
+#elif defined(__TARGET_ARCH_arm64)
+#define SYSCALL_KPROBE(name) SEC("kprobe/__arm64_sys_" #name)
+#else
+#error "Unsupported architecture for syscall kprobe fallback"
+#endif
+
+#define SYSCALL_ARG1(ctx) PT_REGS_PARM1_CORE_SYSCALL(PT_REGS_SYSCALL_REGS(ctx))
+#define SYSCALL_ARG2(ctx) PT_REGS_PARM2_CORE_SYSCALL(PT_REGS_SYSCALL_REGS(ctx))
+#define SYSCALL_ARG3(ctx) PT_REGS_PARM3_CORE_SYSCALL(PT_REGS_SYSCALL_REGS(ctx))
+#define SYSCALL_ARG4(ctx) PT_REGS_PARM4_CORE_SYSCALL(PT_REGS_SYSCALL_REGS(ctx))
+#define SYSCALL_ARG5(ctx) PT_REGS_PARM5_CORE_SYSCALL(PT_REGS_SYSCALL_REGS(ctx))
+
 // Configuration map - shared with userspace
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -638,11 +652,11 @@ int handle_openat_tp(struct trace_event_raw_sys_enter *ctx)
 }
 
 // Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
-SEC("kprobe/__x64_sys_openat")
+SYSCALL_KPROBE(openat)
 int handle_openat_kp(struct pt_regs *ctx)
 {
-    const char *filename = (const char *)PT_REGS_PARM2(ctx);
-    int flags = (int)PT_REGS_PARM3(ctx);
+    const char *filename = (const char *)SYSCALL_ARG2(ctx);
+    int flags = (int)SYSCALL_ARG3(ctx);
     return handle_openat_common(filename, flags);
 }
 
@@ -732,10 +746,10 @@ int handle_unlinkat_tp(struct trace_event_raw_sys_enter *ctx)
 }
 
 // Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
-SEC("kprobe/__x64_sys_unlinkat")
+SYSCALL_KPROBE(unlinkat)
 int handle_unlinkat_kp(struct pt_regs *ctx)
 {
-    const char *filename = (const char *)PT_REGS_PARM2(ctx);
+    const char *filename = (const char *)SYSCALL_ARG2(ctx);
     return handle_unlinkat_common(filename);
 }
 
@@ -1372,10 +1386,10 @@ int handle_setuid_tp(struct trace_event_raw_sys_enter *ctx)
 }
 
 // Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
-SEC("kprobe/__x64_sys_setuid")
+SYSCALL_KPROBE(setuid)
 int handle_setuid_kp(struct pt_regs *ctx)
 {
-    __u32 new_uid = (__u32)PT_REGS_PARM1(ctx);
+    __u32 new_uid = (__u32)SYSCALL_ARG1(ctx);
     return handle_setuid_common(new_uid);
 }
 
@@ -1429,10 +1443,10 @@ int handle_setgid_tp(struct trace_event_raw_sys_enter *ctx)
 }
 
 // Kprobe version (RHEL 9 fallback when syscall tracepoints are blocked)
-SEC("kprobe/__x64_sys_setgid")
+SYSCALL_KPROBE(setgid)
 int handle_setgid_kp(struct pt_regs *ctx)
 {
-    __u32 new_gid = (__u32)PT_REGS_PARM1(ctx);
+    __u32 new_gid = (__u32)SYSCALL_ARG1(ctx);
     return handle_setgid_common(new_gid);
 }
 
@@ -1499,11 +1513,11 @@ int handle_ptrace_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_ptrace_common(request, target_pid);
 }
 
-SEC("kprobe/__x64_sys_ptrace")
+SYSCALL_KPROBE(ptrace)
 int handle_ptrace_kp(struct pt_regs *ctx)
 {
-    long request = (long)PT_REGS_PARM1(ctx);
-    __u32 target_pid = (__u32)PT_REGS_PARM2(ctx);
+    long request = (long)SYSCALL_ARG1(ctx);
+    __u32 target_pid = (__u32)SYSCALL_ARG2(ctx);
     return handle_ptrace_common(request, target_pid);
 }
 
@@ -1545,7 +1559,7 @@ int handle_finit_module_tp(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
-SEC("kprobe/__x64_sys_finit_module")
+SYSCALL_KPROBE(finit_module)
 int handle_finit_module_kp(struct pt_regs *ctx)
 {
     __u32 uid = bpf_get_current_uid_gid();
@@ -1564,7 +1578,7 @@ int handle_finit_module_kp(struct pt_regs *ctx)
     FILL_PROCESS_CONTEXT(event, task);
     FILL_NAMESPACE_INFO(event, task);
     event->target_pid = 0;
-    event->flags = (__u32)PT_REGS_PARM3(ctx);
+    event->flags = (__u32)SYSCALL_ARG3(ctx);
     event->port = 0;
     event->family = 0;
     event->extra = 0;
@@ -1606,7 +1620,7 @@ int handle_init_module_tp(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
-SEC("kprobe/__x64_sys_init_module")
+SYSCALL_KPROBE(init_module)
 int handle_init_module_kp(struct pt_regs *ctx)
 {
     __u32 uid = bpf_get_current_uid_gid();
@@ -1690,11 +1704,11 @@ int handle_memfd_create_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_memfd_common(name, flags);
 }
 
-SEC("kprobe/__x64_sys_memfd_create")
+SYSCALL_KPROBE(memfd_create)
 int handle_memfd_create_kp(struct pt_regs *ctx)
 {
-    const char *name = (const char *)PT_REGS_PARM1(ctx);
-    unsigned int flags = (unsigned int)PT_REGS_PARM2(ctx);
+    const char *name = (const char *)SYSCALL_ARG1(ctx);
+    unsigned int flags = (unsigned int)SYSCALL_ARG2(ctx);
     return handle_memfd_common(name, flags);
 }
 
@@ -1773,12 +1787,12 @@ int handle_bind_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_bind_common(fd, addr, addrlen);
 }
 
-SEC("kprobe/__x64_sys_bind")
+SYSCALL_KPROBE(bind)
 int handle_bind_kp(struct pt_regs *ctx)
 {
-    int fd = (int)PT_REGS_PARM1(ctx);
-    struct sockaddr *addr = (struct sockaddr *)PT_REGS_PARM2(ctx);
-    int addrlen = (int)PT_REGS_PARM3(ctx);
+    int fd = (int)SYSCALL_ARG1(ctx);
+    struct sockaddr *addr = (struct sockaddr *)SYSCALL_ARG2(ctx);
+    int addrlen = (int)SYSCALL_ARG3(ctx);
     return handle_bind_common(fd, addr, addrlen);
 }
 
@@ -1845,10 +1859,10 @@ int handle_unshare_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_unshare_common(flags);
 }
 
-SEC("kprobe/__x64_sys_unshare")
+SYSCALL_KPROBE(unshare)
 int handle_unshare_kp(struct pt_regs *ctx)
 {
-    unsigned long flags = (unsigned long)PT_REGS_PARM1(ctx);
+    unsigned long flags = (unsigned long)SYSCALL_ARG1(ctx);
     return handle_unshare_common(flags);
 }
 
@@ -1913,13 +1927,13 @@ int handle_execveat_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_execveat_common(dirfd, pathname, flags);
 }
 
-SEC("kprobe/__x64_sys_execveat")
+SYSCALL_KPROBE(execveat)
 int handle_execveat_kp(struct pt_regs *ctx)
 {
-    int dirfd = (int)PT_REGS_PARM1(ctx);
-    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
+    int dirfd = (int)SYSCALL_ARG1(ctx);
+    const char *pathname = (const char *)SYSCALL_ARG2(ctx);
     // PARM3 = argv, PARM4 = envp
-    int flags = (int)PT_REGS_PARM5(ctx);
+    int flags = (int)SYSCALL_ARG5(ctx);
     return handle_execveat_common(dirfd, pathname, flags);
 }
 
@@ -1985,11 +1999,11 @@ int handle_bpf_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_bpf_common(cmd, attr_size);
 }
 
-SEC("kprobe/__x64_sys_bpf")
+SYSCALL_KPROBE(bpf)
 int handle_bpf_kp(struct pt_regs *ctx)
 {
-    int cmd = (int)PT_REGS_PARM1(ctx);
-    unsigned int attr_size = (unsigned int)PT_REGS_PARM3(ctx);
+    int cmd = (int)SYSCALL_ARG1(ctx);
+    unsigned int attr_size = (unsigned int)SYSCALL_ARG3(ctx);
     return handle_bpf_common(cmd, attr_size);
 }
 
@@ -2382,12 +2396,12 @@ int handle_security_openat_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_security_openat(dfd, pathname, flags);
 }
 
-SEC("kprobe/__x64_sys_openat")
+SYSCALL_KPROBE(openat)
 int handle_security_openat_kp(struct pt_regs *ctx)
 {
-    int dfd = (int)PT_REGS_PARM1(ctx);
-    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
-    int flags = (int)PT_REGS_PARM3(ctx);
+    int dfd = (int)SYSCALL_ARG1(ctx);
+    const char *pathname = (const char *)SYSCALL_ARG2(ctx);
+    int flags = (int)SYSCALL_ARG3(ctx);
     return handle_security_openat(dfd, pathname, flags);
 }
 
@@ -2453,12 +2467,12 @@ int handle_fchmodat_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_fchmodat_common(dfd, pathname, mode);
 }
 
-SEC("kprobe/__x64_sys_fchmodat")
+SYSCALL_KPROBE(fchmodat)
 int handle_fchmodat_kp(struct pt_regs *ctx)
 {
-    int dfd = (int)PT_REGS_PARM1(ctx);
-    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
-    __u32 mode = (__u32)PT_REGS_PARM3(ctx);
+    int dfd = (int)SYSCALL_ARG1(ctx);
+    const char *pathname = (const char *)SYSCALL_ARG2(ctx);
+    __u32 mode = (__u32)SYSCALL_ARG3(ctx);
 
     return handle_fchmodat_common(dfd, pathname, mode);
 }
@@ -2630,12 +2644,12 @@ int handle_persistence_openat_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_persistence_openat(dfd, pathname, flags);
 }
 
-SEC("kprobe/__x64_sys_openat")
+SYSCALL_KPROBE(openat)
 int handle_persistence_openat_kp(struct pt_regs *ctx)
 {
-    int dfd = (int)PT_REGS_PARM1(ctx);
-    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
-    int flags = (int)PT_REGS_PARM3(ctx);
+    int dfd = (int)SYSCALL_ARG1(ctx);
+    const char *pathname = (const char *)SYSCALL_ARG2(ctx);
+    int flags = (int)SYSCALL_ARG3(ctx);
 
     return handle_persistence_openat(dfd, pathname, flags);
 }
@@ -2806,12 +2820,12 @@ int handle_raw_disk_openat_tp(struct trace_event_raw_sys_enter *ctx)
     return handle_raw_disk_openat(dfd, pathname, flags);
 }
 
-SEC("kprobe/__x64_sys_openat")
+SYSCALL_KPROBE(openat)
 int handle_raw_disk_openat_kp(struct pt_regs *ctx)
 {
-    int dfd = (int)PT_REGS_PARM1(ctx);
-    const char *pathname = (const char *)PT_REGS_PARM2(ctx);
-    int flags = (int)PT_REGS_PARM3(ctx);
+    int dfd = (int)SYSCALL_ARG1(ctx);
+    const char *pathname = (const char *)SYSCALL_ARG2(ctx);
+    int flags = (int)SYSCALL_ARG3(ctx);
 
     return handle_raw_disk_openat(dfd, pathname, flags);
 }

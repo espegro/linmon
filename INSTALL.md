@@ -537,7 +537,7 @@ sudo systemctl start linmond
 
 **Solution**: This requires root/CAP_SYS_RESOURCE. Make sure systemd service has:
 ```ini
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_RESOURCE
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_SYS_PTRACE
 ```
 
 **Problem**: No events logged

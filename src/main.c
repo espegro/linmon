@@ -3,6 +3,7 @@
 // LinMon daemon - main entry point
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
@@ -185,9 +186,26 @@ static void print_usage(const char *progname)
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
                           va_list args)
 {
+    char msg[512];
+
     if (level == LIBBPF_DEBUG)
         return 0;
-    return vfprintf(stderr, format, args);
+
+    vsnprintf(msg, sizeof(msg), format, args);
+
+    /*
+     * RHEL 9/SELinux can deny selected syscall tracepoint attachments. LinMon
+     * immediately falls back to kprobes for those programs, so keep journald
+     * focused on the explicit fallback result we log in attach_prog_with_fallback().
+     */
+    if (strstr(msg, "failed to attach to tracepoint 'syscalls/sys_enter_") ||
+        (strstr(msg, "_tp': failed to create BPF link for perf_event FD") &&
+         strstr(msg, "prog 'handle_"))) {
+        return 0;
+    }
+
+    fputs(msg, stderr);
+    return 0;
 }
 
 static int bump_memlock_rlimit(void)
@@ -660,17 +678,21 @@ static struct bpf_link *attach_prog_with_fallback(
         if (!err) {
             // Success!
             printf("  ✓ %s (tracepoint)\n", name);
+            syslog(LOG_INFO, "bpf_attach: %s attached via tracepoint", name);
             return link;
         }
 
-        // If error is not EPERM, it's a real error
-        if (err != -EPERM && err != -EACCES) {
+        // If the tracepoint cannot be used, try the kprobe fallback.
+        if (err != -EPERM && err != -EACCES && err != -ENOENT &&
+            err != -EINVAL && err != -EOPNOTSUPP) {
             fprintf(stderr, "  ✗ %s (tracepoint): %s\n", name, strerror(-err));
             return NULL;
         }
 
-        // EPERM means tracepoint is blocked, try kprobe
-        printf("  ! %s: tracepoint blocked, trying kprobe...\n", name);
+        printf("  ! %s: tracepoint unavailable (%s), trying kprobe...\n",
+               name, strerror(-err));
+        syslog(LOG_INFO, "bpf_attach: %s tracepoint unavailable (%s), trying kprobe fallback",
+               name, strerror(-err));
         link = NULL;  // Clear failed link
     }
 
@@ -681,14 +703,18 @@ static struct bpf_link *attach_prog_with_fallback(
 
         if (!err) {
             printf("  ✓ %s (kprobe fallback)\n", name);
+            syslog(LOG_INFO, "bpf_attach: %s attached via kprobe fallback", name);
             return link;
         }
 
         fprintf(stderr, "  ✗ %s (kprobe): %s\n", name, strerror(-err));
+        syslog(LOG_WARNING, "bpf_attach: %s kprobe fallback failed: %s",
+               name, strerror(-err));
         return NULL;
     }
 
     fprintf(stderr, "  ✗ %s: no fallback available\n", name);
+    syslog(LOG_WARNING, "bpf_attach: %s has no fallback program", name);
     return NULL;
 }
 
@@ -884,6 +910,13 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         skel->progs.handle_persistence_openat_tp,
         skel->progs.handle_persistence_openat_kp,
         "Persistence monitoring (T1053, T1547)");
+    if (!link) failed_count++; else attached_count++;
+
+    // Security monitoring - raw disk access (T1561.001/T1561.002)
+    link = attach_prog_with_fallback(
+        skel->progs.handle_raw_disk_openat_tp,
+        skel->progs.handle_raw_disk_openat_kp,
+        "Raw disk access monitoring (T1561)");
     if (!link) failed_count++; else attached_count++;
 
     printf("\nAttachment summary: %d programs attached", attached_count);

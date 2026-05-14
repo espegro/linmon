@@ -12,6 +12,7 @@ RestartSec=5
 
 # Security Hardening
 # Note: Cannot use NoNewPrivileges - linmond needs CAP_SYS_ADMIN to load BPF before dropping privileges
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_SYS_PTRACE
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
