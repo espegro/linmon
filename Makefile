@@ -84,7 +84,7 @@ $(BUILD_DIR) $(OBJ_DIR) $(BPF_OBJ_DIR) $(TEST_BIN_DIR):
 	mkdir -p $@
 
 # Compile BPF programs
-$(BPF_OBJ_DIR)/%.bpf.o: $(BPF_DIR)/%.bpf.c | $(BPF_OBJ_DIR)
+$(BPF_OBJ_DIR)/%.bpf.o: $(BPF_DIR)/%.bpf.c $(BPF_DIR)/common.h $(BPF_DIR)/vmlinux.h | $(BPF_OBJ_DIR)
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 	llvm-strip -g $@
 
@@ -105,6 +105,9 @@ $(BUILD_DIR)/$(DAEMON): $(DAEMON_OBJECTS) | $(BUILD_DIR)
 # Compile test for filter.c
 $(TEST_BIN_DIR)/test_filter: $(TEST_DIR)/test_filter.c $(SRC_DIR)/filter.c $(SRC_DIR)/config.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
 	$(CC) $(TEST_CFLAGS) $^ -o $@
+
+$(TEST_BIN_DIR)/test_filehash: $(TEST_DIR)/test_filehash.c $(SRC_DIR)/filehash.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $^ -lcrypto -o $@
 
 # Compile JSON logger escaping tests against the production implementation.
 $(TEST_BIN_DIR)/test_logger: $(TEST_DIR)/test_logger.c $(SRC_DIR)/json.c | $(TEST_BIN_DIR)

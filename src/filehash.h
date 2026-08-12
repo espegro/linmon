@@ -37,4 +37,10 @@ void filehash_stats(unsigned long *hits, unsigned long *misses,
 // Thread-safe
 bool filehash_calculate(const char *path, char *hash_out, size_t hash_size);
 
+// Recalculate SHA256 from an already-open regular-file descriptor. Uses pread()
+// so the caller's file offset is unchanged, and updates the cache under cache_key.
+// Unlike filehash_calculate(), this always reads the file contents.
+bool filehash_calculate_fd(int fd, const char *cache_key,
+                           char *hash_out, size_t hash_size);
+
 #endif /* __LINMON_FILEHASH_H */

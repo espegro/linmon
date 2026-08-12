@@ -1062,8 +1062,8 @@ int main(int argc, char **argv)
     // Initialize user database
     userdb_init();
 
-    // Initialize file hash cache if enabled
-    if (global_config.hash_binaries) {
+    // Auth integrity also uses the hash cache even when event enrichment does not.
+    if (global_config.hash_binaries || global_config.monitor_auth_integrity) {
         filehash_init(global_config.hash_cache_file,
                       global_config.hash_cache_size);
     }
@@ -1074,13 +1074,13 @@ int main(int argc, char **argv)
                       global_config.pkg_cache_size);
     }
 
-    // Initialize authentication integrity monitoring
-    if (global_config.monitor_auth_integrity) {
-        err = authcheck_init(global_config.verify_packages);
-        if (err)
-            syslog(LOG_WARNING, "authcheck: failed to load baseline: %s",
-                   strerror(-err));
-    }
+    // Always pre-open critical auth files while startup privileges are present.
+    // This permits safely enabling the monitor on reload without retaining a
+    // broad filesystem-read capability at runtime.
+    err = authcheck_init(global_config.verify_packages);
+    if (err)
+        syslog(LOG_WARNING, "authcheck: initialization warning: %s",
+               strerror(-err));
 
     // Configure logger enrichment options
     logger_set_enrichment(global_config.resolve_usernames,
@@ -1307,6 +1307,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "Warning: Could not hash config file\n");
         strncpy(config_sha256, "unknown", sizeof(config_sha256));
         config_sha256[sizeof(config_sha256) - 1] = '\0';
+    }
+
+    // Establish and package-verify baselines before dropping DAC privileges.
+    // Periodic checks later reuse the narrowly scoped open descriptors.
+    if (global_config.monitor_auth_integrity) {
+        int violations = authcheck_verify_all();
+        if (violations > 0)
+            syslog(LOG_WARNING,
+                   "authcheck: %d integrity violation(s) detected at startup",
+                   violations);
     }
 
     // Record daemon start time for uptime tracking
@@ -1553,6 +1563,11 @@ int main(int argc, char **argv)
         printf("✓ Verified cannot regain root privileges\n");
     }
 
+    // The initial privileged auth check may have updated the in-memory
+    // baseline. Persist it as the unprivileged owner of /var/cache/linmon.
+    if (authcheck_persist_baseline() != 0)
+        syslog(LOG_WARNING, "authcheck: failed to persist integrity baseline");
+
     // Set up ring buffer polling
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event,
                           NULL, NULL);
@@ -1584,18 +1599,7 @@ int main(int argc, char **argv)
     time_t last_logfile_check = time(NULL);
     const int logfile_check_interval = 10;  // Check every 10 seconds
 
-    // Establish/verify the authentication baseline immediately at startup.
-    // Waiting for the first interval leaves a blind window and delays creation
-    // of the trust-on-first-use baseline for generated configuration files.
     time_t last_auth_check = time(NULL);
-    if (global_config.monitor_auth_integrity) {
-        int violations = authcheck_verify_all();
-        if (violations > 0)
-            syslog(LOG_WARNING,
-                   "authcheck: %d integrity violation(s) detected at startup",
-                   violations);
-        last_auth_check = time(NULL);
-    }
     int auth_check_interval = global_config.auth_integrity_interval * 60;  // Convert to seconds
 
     // Main event loop - poll for events
@@ -1666,16 +1670,16 @@ int main(int argc, char **argv)
                 continue;
             }
 
-            bool old_hash_binaries = global_config.hash_binaries;
+            bool old_hash_cache_needed = global_config.hash_binaries ||
+                                         global_config.monitor_auth_integrity;
             bool old_verify_packages = global_config.verify_packages;
-            bool old_monitor_auth = global_config.monitor_auth_integrity;
 
             free_config(&global_config);
             global_config = new_config;
 
-            if (old_hash_binaries)
+            if (old_hash_cache_needed)
                 filehash_cleanup();
-            if (global_config.hash_binaries)
+            if (global_config.hash_binaries || global_config.monitor_auth_integrity)
                 filehash_init(global_config.hash_cache_file,
                               global_config.hash_cache_size);
 
@@ -1685,16 +1689,7 @@ int main(int argc, char **argv)
                 pkgcache_init(global_config.pkg_cache_file,
                               global_config.pkg_cache_size);
 
-            if (global_config.monitor_auth_integrity) {
-                if (!old_monitor_auth ||
-                    old_verify_packages != global_config.verify_packages) {
-                    if (authcheck_init(global_config.verify_packages) != 0) {
-                        syslog(LOG_WARNING, "authcheck: failed to reload baseline");
-                    }
-                } else {
-                    authcheck_set_package_verification(global_config.verify_packages);
-                }
-            }
+            authcheck_set_package_verification(global_config.verify_packages);
 
             // Reinitialize filter
             filter_init(&global_config);
@@ -1841,6 +1836,7 @@ cleanup:
     linmon_bpf__destroy(skel);
     logger_cleanup();
     userdb_cleanup();
+    authcheck_cleanup();
     filehash_cleanup();
     pkgcache_cleanup();
     free_config(&global_config);

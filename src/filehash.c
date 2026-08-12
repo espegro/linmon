@@ -146,25 +146,18 @@ static void cache_update(struct hash_entry *entry, dev_t dev, ino_t ino,
     entry->access_count = ++global_access_counter;
 }
 
-// Compute SHA256 hash of file
-static bool compute_sha256(const char *path, char *hash_out, struct stat *st_out)
+// Compute SHA256 from an open descriptor without changing its shared offset.
+static bool compute_sha256_fd(int fd, char *hash_out, struct stat *st_out)
 {
     unsigned char hash[SHA256_DIGEST_LENGTH];
     unsigned char buffer[READ_BUFFER_SIZE];
     EVP_MD_CTX *mdctx;
-    int fd;
     ssize_t bytes;
+    off_t offset = 0;
     unsigned int hash_len;
-    struct stat st;
+    struct stat st, final_st;
 
-    // Open file first to avoid TOCTOU race
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return false;
-
-    // Get file metadata from already-opened fd (no TOCTOU)
     if (fstat(fd, &st) < 0) {
-        close(fd);
         return false;
     }
 
@@ -174,33 +167,36 @@ static bool compute_sha256(const char *path, char *hash_out, struct stat *st_out
 
     // Skip non-regular files
     if (!S_ISREG(st.st_mode)) {
-        close(fd);
         return false;
     }
 
     mdctx = EVP_MD_CTX_new();
     if (!mdctx) {
-        close(fd);
         return false;
     }
 
     if (EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL) != 1) {
         EVP_MD_CTX_free(mdctx);
-        close(fd);
         return false;
     }
 
-    while ((bytes = read(fd, buffer, sizeof(buffer))) > 0) {
+    while ((bytes = pread(fd, buffer, sizeof(buffer), offset)) > 0) {
         if (EVP_DigestUpdate(mdctx, buffer, bytes) != 1) {
             EVP_MD_CTX_free(mdctx);
-            close(fd);
             return false;
         }
+        offset += bytes;
     }
 
-    close(fd);
-
     if (bytes < 0) {
+        EVP_MD_CTX_free(mdctx);
+        return false;
+    }
+
+    // Reject a result if the file changed while it was being read.
+    if (fstat(fd, &final_st) < 0 ||
+        final_st.st_dev != st.st_dev || final_st.st_ino != st.st_ino ||
+        final_st.st_size != st.st_size || final_st.st_mtime != st.st_mtime) {
         EVP_MD_CTX_free(mdctx);
         return false;
     }
@@ -219,6 +215,18 @@ static bool compute_sha256(const char *path, char *hash_out, struct stat *st_out
     hash_out[SHA256_HEX_LEN - 1] = '\0';
 
     return true;
+}
+
+// Open by path for ordinary cached hashing, then delegate to the descriptor
+// implementation to keep one race-safe hashing path.
+static bool compute_sha256(const char *path, char *hash_out, struct stat *st_out)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOCTTY);
+    if (fd < 0)
+        return false;
+    bool ok = compute_sha256_fd(fd, hash_out, st_out);
+    close(fd);
+    return ok;
 }
 
 int filehash_init(const char *cache_file, int max_entries)
@@ -476,5 +484,34 @@ bool filehash_calculate(const char *path, char *hash_out, size_t hash_size)
         snprintf(hash_out, hash_size, "%s", computed_hash);
     }
 
+    return true;
+}
+
+bool filehash_calculate_fd(int fd, const char *cache_key,
+                           char *hash_out, size_t hash_size)
+{
+    char computed_hash[SHA256_HEX_LEN];
+    struct stat actual_st;
+    struct hash_entry *entry;
+
+    if (fd < 0 || !cache_key || !hash_out || hash_size < SHA256_HEX_LEN)
+        return false;
+    if (!compute_sha256_fd(fd, computed_hash, &actual_st))
+        return false;
+
+    pthread_mutex_lock(&cache_mutex);
+    entry = cache_find(cache_key);
+    if (entry) {
+        cache_update(entry, actual_st.st_dev, actual_st.st_ino,
+                     actual_st.st_mtime, actual_st.st_size, computed_hash);
+        stat_recomputes++;
+    } else {
+        cache_add(cache_key, actual_st.st_dev, actual_st.st_ino,
+                  actual_st.st_mtime, actual_st.st_size, computed_hash);
+        stat_misses++;
+    }
+    pthread_mutex_unlock(&cache_mutex);
+
+    snprintf(hash_out, hash_size, "%s", computed_hash);
     return true;
 }

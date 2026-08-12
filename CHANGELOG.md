@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-08-12
+
+### Fixed
+
+- Pre-opened critical authentication files before privilege dropping so periodic
+  integrity checks can hash execute-only and root-readable files without adding
+  broad runtime filesystem capabilities or changing file permissions.
+- Detected deletion and atomic replacement of pre-opened authentication files by
+  comparing pathname and descriptor device/inode identity.
+- Forced content hashing for every authentication check, preventing metadata-
+  preserving changes from being hidden by the ordinary hash cache.
+- Performed the initial authentication and package verification pass before
+  privilege dropping while restricting package-manager helpers to only the DAC
+  override capability needed for protected files.
+
 ## [1.9.1] - 2026-08-12
 
 ### Fixed

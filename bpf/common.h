@@ -18,10 +18,14 @@
 #define MAX_CMDLINE_LEN 512
 
 // File open flags
+#ifdef __BPF__
 #define O_WRONLY    00000001
 #define O_RDWR      00000002
 #define O_CREAT     00000100
 #define O_TRUNC     00001000
+#else
+#include <fcntl.h>
+#endif
 
 // Network constants (only for BPF code - userspace uses system headers)
 #ifdef __BPF__

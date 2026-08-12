@@ -35,7 +35,7 @@
 //      - Even if attacker modifies files, next check will detect it
 //
 //   2. PERFORMANCE:
-//      - Only 9 files checked every 30 minutes (default)
+//      - Only 10 files checked every 30 minutes (default)
 //      - SHA256 hashing: ~20ms total (< 3ms per file)
 //      - Zero overhead between checks (no inotify watchers)
 //      - No kernel event processing (unlike file monitoring)
@@ -128,8 +128,9 @@
 //      - Ubuntu has common-auth, RHEL has system-auth (not both)
 //
 //   2. Calculate SHA256 hash of file contents
-//      - Uses filehash.c with caching
-//      - If hash calculation fails: LOG WARNING, continue
+//      - Reads through a descriptor opened before privilege dropping
+//      - Always hashes contents; metadata-only caching cannot hide changes
+//      - If hashing fails: LOG a sparse critical violation, continue
 //
 //   3. Look up package information (if verify_packages enabled)
 //      - Uses pkgcache.c to query dpkg (Ubuntu) or rpm (RHEL)
@@ -179,8 +180,8 @@
 //      - SIEM correlation works better with sparse violation events
 //
 //   2. LOG VOLUME:
-//      - Default: 9 files × 48 checks/day = 432 checks/day
-//      - If we logged all: 432 events/day × 365 days = 157,680 events/year
+//      - Default: 10 files × 48 checks/day = 480 checks/day
+//      - If we logged all: 480 events/day × 365 days = 175,200 events/year
 //      - With sparse logging: ~0 events/year (unless attack detected)
 //
 //   3. FORENSIC VALUE:
@@ -218,9 +219,9 @@
 // CHECK INTERVAL: 30 minutes (default, configurable)
 //
 // TIME PER CHECK: ~20ms total
-//   - File stat: 9 × <1ms = <10ms
-//   - SHA256 hash: 9 × 2ms = ~18ms (small files, kernel VFS caching)
-//   - Package lookup: 9 × <1ms = <10ms (pkgcache with LRU caching)
+//   - File stat: 10 × <1ms = <10ms
+//   - SHA256 hash: 10 × 2ms = ~20ms (small files, kernel VFS caching)
+//   - Package lookup: 10 × <1ms = <10ms (pkgcache with LRU caching)
 //   - Total: <40ms worst case, ~20ms typical
 //
 // OVERHEAD: <0.002% CPU
@@ -228,9 +229,8 @@
 //   - Negligible impact on system performance
 //
 // CACHING:
-//   - SHA256 hashes cached by filehash.c (mtime-based invalidation)
-//   - Package info cached by pkgcache.c (LRU cache)
-//   - Second check is faster (~5ms) due to caching
+//   - Authentication files are deliberately rehashed on every check
+//   - Package info is cached by pkgcache.c (LRU cache)
 //
 // ═══════════════════════════════════════════════════════════════════════════
 // SECURITY PROPERTIES
@@ -265,6 +265,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
 #include <syslog.h>
@@ -291,7 +292,9 @@
 //   - Array is NULL-terminated for safe iteration
 //   - Loop condition: critical_files[i] != NULL
 //
-static const char *critical_files[] = {
+#define CRITICAL_FILE_COUNT 10
+
+static const char *critical_files[CRITICAL_FILE_COUNT + 1] = {
     // Authentication binaries
     "/usr/sbin/sshd",
     "/usr/bin/sudo",
@@ -314,8 +317,65 @@ static const char *critical_files[] = {
 };
 
 static bool verify_packages_enabled = false;
-static char baseline_hashes[10][SHA256_HEX_LEN];
+static char baseline_hashes[CRITICAL_FILE_COUNT][SHA256_HEX_LEN];
 static const char *baseline_path = "/var/cache/linmon/auth-baseline.cache";
+
+struct auth_file_state {
+    int fd;
+    bool identity_alerted;
+    dev_t alerted_dev;
+    ino_t alerted_ino;
+};
+
+static struct auth_file_state auth_files[CRITICAL_FILE_COUNT];
+static bool authcheck_initialized = false;
+static bool baseline_dirty = false;
+
+static void close_auth_files(void)
+{
+    for (int i = 0; critical_files[i] != NULL; i++) {
+        if (auth_files[i].fd >= 0)
+            close(auth_files[i].fd);
+        auth_files[i].fd = -1;
+        auth_files[i].identity_alerted = false;
+        auth_files[i].alerted_dev = 0;
+        auth_files[i].alerted_ino = 0;
+    }
+}
+
+// Open while startup privileges are still available. The descriptor remains
+// readable after setuid(), but grants access only to this exact inode.
+static int open_auth_file(int index)
+{
+    struct stat path_st, fd_st;
+    int fd;
+
+    fd = open(critical_files[index], O_RDONLY | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0)
+        return -errno;
+    if (fstat(fd, &fd_st) != 0) {
+        int saved = errno;
+        close(fd);
+        return -saved;
+    }
+    if (!S_ISREG(fd_st.st_mode)) {
+        close(fd);
+        return -EINVAL;
+    }
+    if (stat(critical_files[index], &path_st) != 0) {
+        int saved = errno;
+        close(fd);
+        return -saved;
+    }
+    if (path_st.st_dev != fd_st.st_dev || path_st.st_ino != fd_st.st_ino) {
+        close(fd);
+        return -ESTALE;
+    }
+
+    auth_files[index].fd = fd;
+    auth_files[index].identity_alerted = false;
+    return 0;
+}
 
 static int baseline_index(const char *path)
 {
@@ -396,14 +456,56 @@ static int save_baselines(void)
 //
 int authcheck_init(bool verify_packages)
 {
+    int first_error = 0;
+
     verify_packages_enabled = verify_packages;
     memset(baseline_hashes, 0, sizeof(baseline_hashes));
-    return load_baselines();
+    baseline_dirty = false;
+    if (authcheck_initialized)
+        close_auth_files();
+    for (int i = 0; critical_files[i] != NULL; i++)
+        auth_files[i].fd = -1;
+    authcheck_initialized = true;
+
+    int ret = load_baselines();
+    if (ret != 0)
+        first_error = ret;
+
+    for (int i = 0; critical_files[i] != NULL; i++) {
+        ret = open_auth_file(i);
+        if (ret != 0 && ret != -ENOENT) {
+            syslog(LOG_WARNING, "authcheck: failed to pre-open %s: %s",
+                   critical_files[i], strerror(-ret));
+            if (first_error == 0)
+                first_error = ret;
+        }
+    }
+    return first_error;
 }
 
 void authcheck_set_package_verification(bool verify_packages)
 {
     verify_packages_enabled = verify_packages;
+}
+
+void authcheck_cleanup(void)
+{
+    if (authcheck_initialized) {
+        close_auth_files();
+        authcheck_initialized = false;
+    }
+}
+
+int authcheck_persist_baseline(void)
+{
+    int ret;
+
+    if (!baseline_dirty)
+        return 0;
+    ret = save_baselines();
+    if (ret == 0)
+        baseline_dirty = false;
+    return ret;
 }
 
 // Log authentication integrity violation to JSON and syslog
@@ -549,6 +651,62 @@ static void log_auth_integrity_violation(const char *file_path,
     if (mutex) pthread_mutex_unlock(mutex);
 }
 
+static void log_identity_violation_once(int index, const char *verdict,
+                                        dev_t dev, ino_t ino,
+                                        bool *violation)
+{
+    struct auth_file_state *state = &auth_files[index];
+
+    if (!state->identity_alerted || state->alerted_dev != dev ||
+        state->alerted_ino != ino) {
+        log_auth_integrity_violation(critical_files[index], "unavailable", "",
+                                     verdict, false, false);
+        state->identity_alerted = true;
+        state->alerted_dev = dev;
+        state->alerted_ino = ino;
+        *violation = true;
+    }
+}
+
+// Confirm that the pathname still resolves to the exact regular file opened
+// before privilege dropping. This detects deletion and atomic replacement even
+// when the replacement is not readable by the runtime user.
+static bool auth_file_ready(int index, bool *violation)
+{
+    struct auth_file_state *state = &auth_files[index];
+    struct stat path_st, fd_st;
+    int ret;
+
+    if (stat(critical_files[index], &path_st) != 0) {
+        if (state->fd >= 0)
+            log_identity_violation_once(index, "path_missing", 0, 0, violation);
+        return false;
+    }
+
+    if (state->fd < 0) {
+        ret = open_auth_file(index);
+        if (ret != 0) {
+            log_identity_violation_once(index, "new_file_unreadable",
+                                        path_st.st_dev, path_st.st_ino,
+                                        violation);
+            return false;
+        }
+    }
+
+    if (fstat(state->fd, &fd_st) != 0) {
+        log_identity_violation_once(index, "descriptor_invalid",
+                                    path_st.st_dev, path_st.st_ino, violation);
+        return false;
+    }
+    if (path_st.st_dev != fd_st.st_dev || path_st.st_ino != fd_st.st_ino) {
+        log_identity_violation_once(index, "path_replaced",
+                                    path_st.st_dev, path_st.st_ino, violation);
+        return false;
+    }
+
+    return true;
+}
+
 // Verify integrity of all critical authentication files
 //
 // PUBLIC API: Main entry point for periodic integrity checking
@@ -560,16 +718,16 @@ static void log_auth_integrity_violation(const char *file_path,
 // WHEN CALLED:
 //   - Periodically from main event loop (every 30 minutes by default)
 //   - Configured via: auth_integrity_interval in linmon.conf
-//   - Can be triggered on-demand via SIGHUP (forces immediate check)
+//   - Its interval is reloaded via SIGHUP
 //
 // ALGORITHM:
 //   FOR EACH file in critical_files[]:
 //     1. Check if file exists (stat)
 //        - If missing: SKIP (distro-specific files may not exist)
 //
-//     2. Calculate SHA256 hash
-//        - Uses filehash_calculate() with caching
-//        - If hash fails: LOG WARNING, continue (don't abort check)
+//     2. Calculate SHA256 hash from the retained descriptor
+//        - Always reads contents, bypassing metadata cache hits
+//        - If hashing fails: LOG a sparse violation, continue
 //
 //     3. Look up package information (if verify_packages enabled)
 //        - Uses pkgcache_lookup() to query dpkg/rpm
@@ -591,9 +749,9 @@ static void log_auth_integrity_violation(const char *file_path,
 //   - Missing file: SKIP (not an error - distro differences)
 //     * /etc/pam.d/common-auth only exists on Ubuntu
 //     * /etc/pam.d/system-auth only exists on RHEL
-//   - Hash calculation failure: LOG WARNING, continue
+//   - Hash calculation failure: LOG a sparse critical violation, continue
 //     * May indicate file deleted during check
-//     * May indicate permission issue (shouldn't happen with CAP_SYS_PTRACE)
+//     * May indicate descriptor or filesystem failure
 //   - Package lookup failure: LOG WARNING, continue
 //     * May indicate package database corruption
 //     * May indicate file not from package (manual install)
@@ -604,8 +762,8 @@ static void log_auth_integrity_violation(const char *file_path,
 //   - If pkgcache_lookup fails, skip verification for that file
 //
 // PERFORMANCE:
-//   - Total time: ~20ms (9 files × ~2ms per hash)
-//   - Caching: Subsequent checks are faster (~5ms due to hash caching)
+//   - Total hashing time: ~20ms (10 files × ~2ms per hash)
+//   - Package metadata remains cached; file contents are always re-read
 //   - No locks held during file I/O (only mutex for logging)
 //
 // SECURITY PROPERTIES:
@@ -645,21 +803,32 @@ int authcheck_verify_all(void)
 
     for (int i = 0; critical_files[i] != NULL; i++) {
         const char *path = critical_files[i];
+        bool identity_violation = false;
 
-        // Check if file exists
-        struct stat st;
-        if (stat(path, &st) != 0) {
-            // File doesn't exist - this is OK for distro-specific files
-            // (e.g., /etc/pam.d/system-auth only on RHEL, not Ubuntu)
+        if (!auth_file_ready(i, &identity_violation)) {
+            if (identity_violation)
+                violations++;
             continue;
         }
 
-        // Calculate hash
-        if (!filehash_calculate(path, hash, sizeof(hash))) {
-            // Hash calculation failed - log warning but continue
-            syslog(LOG_WARNING, "authcheck: failed to hash %s", path);
+        // Force a content read through the descriptor retained from privileged
+        // startup. This works after setuid(linmon) without broad DAC capabilities.
+        if (!filehash_calculate_fd(auth_files[i].fd, path,
+                                   hash, sizeof(hash)) &&
+            !filehash_calculate_fd(auth_files[i].fd, path,
+                                   hash, sizeof(hash))) {
+            struct stat fd_st = {0};
+            fstat(auth_files[i].fd, &fd_st);
+            log_identity_violation_once(i, "hash_unavailable",
+                                        fd_st.st_dev, fd_st.st_ino,
+                                        &identity_violation);
+            if (identity_violation)
+                violations++;
             continue;
         }
+        auth_files[i].identity_alerted = false;
+        auth_files[i].alerted_dev = 0;
+        auth_files[i].alerted_ino = 0;
 
         int idx = baseline_index(path);
         bool first_seen = idx < 0 || baseline_hashes[idx][0] == '\0';
@@ -695,7 +864,11 @@ int authcheck_verify_all(void)
         }
     }
 
-    if (baseline_changed && save_baselines() != 0)
+    if (baseline_changed)
+        baseline_dirty = true;
+    // The privileged startup process intentionally lacks CAP_CHOWN. Defer its
+    // write until main has dropped to the linmon account, which owns the cache.
+    if (geteuid() != 0 && authcheck_persist_baseline() != 0)
         syslog(LOG_WARNING, "authcheck: failed to persist integrity baseline");
 
     return violations;

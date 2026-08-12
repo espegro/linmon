@@ -59,6 +59,38 @@ enum pkg_manager {
 
 static enum pkg_manager detected_pkg_manager = PKG_UNKNOWN;
 
+static int prepare_package_helper(bool allow_dac_override)
+{
+    cap_t caps;
+
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0)
+        return -1;
+    caps = cap_init();
+    if (!caps)
+        return -1;
+    if (allow_dac_override) {
+        cap_value_t cap = CAP_DAC_OVERRIDE;
+        if (cap_set_flag(caps, CAP_PERMITTED, 1, &cap, CAP_SET) != 0 ||
+            cap_set_flag(caps, CAP_EFFECTIVE, 1, &cap, CAP_SET) != 0 ||
+            cap_set_flag(caps, CAP_INHERITABLE, 1, &cap, CAP_SET) != 0) {
+            cap_free(caps);
+            return -1;
+        }
+    }
+    if (cap_set_proc(caps) != 0) {
+        cap_free(caps);
+        return -1;
+    }
+    cap_free(caps);
+
+    if (allow_dac_override &&
+        prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_DAC_OVERRIDE, 0, 0) != 0)
+        return -1;
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+        return -1;
+    return 0;
+}
+
 // UsrMerge detection: -1=unknown, 0=no, 1=yes
 // Modern Debian/Ubuntu use /bin -> /usr/bin symlinks (UsrMerge)
 static int usrmerge_detected = -1;
@@ -166,8 +198,6 @@ static int try_package_query(const char *query_path, char *buf, size_t buflen)
 	}
 
 	if (pid == 0) {
-		cap_t empty_caps;
-
 		// Child process: execute package manager
 		close(pipefd[0]);  // Close read end
 
@@ -183,21 +213,8 @@ static int try_package_query(const char *query_path, char *buf, size_t buflen)
 
 		close(pipefd[1]);
 
-		// Child helpers do not need any retained daemon capabilities.
-		if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0)
-			_exit(127);
-
-		empty_caps = cap_init();
-		if (!empty_caps)
-			_exit(127);
-
-		if (cap_set_proc(empty_caps) != 0) {
-			cap_free(empty_caps);
-			_exit(127);
-		}
-		cap_free(empty_caps);
-
-		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+		// Ownership queries only need access to the public package database.
+		if (prepare_package_helper(false) != 0)
 			_exit(127);
 
 		// Execute without shell - direct execve() call
@@ -360,23 +377,15 @@ static enum pkg_integrity_status verify_package_file(const char *package,
         return PKG_INTEGRITY_UNVERIFIABLE;
     }
     if (pid == 0) {
-        cap_t empty_caps;
-
         close(pipefd[0]);
         if (dup2(pipefd[1], STDOUT_FILENO) < 0 ||
             dup2(pipefd[1], STDERR_FILENO) < 0)
             _exit(127);
         close(pipefd[1]);
-        if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0)
-            _exit(127);
-        empty_caps = cap_init();
-        if (!empty_caps || cap_set_proc(empty_caps) != 0) {
-            if (empty_caps)
-                cap_free(empty_caps);
-            _exit(127);
-        }
-        cap_free(empty_caps);
-        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+        // During privileged startup retain only DAC_OVERRIDE so dpkg/rpm can
+        // verify execute-only or root-readable files. Runtime helpers retain no
+        // capabilities, preserving the daemon's minimal steady-state profile.
+        if (prepare_package_helper(geteuid() == 0) != 0)
             _exit(127);
         if (detected_pkg_manager == PKG_DPKG) {
             char *args[] = {"/usr/bin/dpkg", "--verify", (char *)package, NULL};

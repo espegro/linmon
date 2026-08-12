@@ -11,6 +11,8 @@
 // verify_packages: enable package verification (requires pkgcache)
 int authcheck_init(bool verify_packages);
 void authcheck_set_package_verification(bool verify_packages);
+int authcheck_persist_baseline(void);
+void authcheck_cleanup(void);
 
 // Perform periodic integrity check of all critical authentication files
 // Logs violations to JSON and syslog
