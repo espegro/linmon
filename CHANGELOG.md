@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-12
+
+### Fixed
+
+- Made signal handling async-signal-safe by deferring logging to the main loop.
+- Applied updated log rotation settings during configuration reload.
+- Rejected symlinked and non-regular hash/package cache files when loading.
+- Escaped authentication-integrity fields before writing JSON logs.
+- Updated installation and security documentation for the dedicated `linmon` account.
+
 ## [1.8.8] - 2026-05-14
 
 ### Fixed

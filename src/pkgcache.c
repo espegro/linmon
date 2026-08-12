@@ -573,14 +573,20 @@ int pkgcache_save(void)
 int pkgcache_load(void)
 {
     FILE *fp;
+    struct stat st;
     char line[PKG_PATH_MAX + PKG_NAME_MAX + 64];
     int loaded = 0;
 
-    fp = fopen(cache_file_path, "r");
+    fp = safe_fopen_readonly(cache_file_path, &st);
     if (!fp) {
         if (errno == ENOENT)
             return 0;  // No cache file yet, that's OK
         return -errno;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        fclose(fp);
+        return -EPERM;
     }
 
     pthread_mutex_lock(&cache_mutex);

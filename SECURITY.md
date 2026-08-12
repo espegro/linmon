@@ -22,7 +22,7 @@ setuid(pw->pw_uid);           // Drop to linmon user
 **Critical**:
 - Supplementary groups must be cleared first (prevents retaining privileged group memberships)
 - This must happen BEFORE dropping capabilities (requires CAP_SETUID/CAP_SETGID)
-- Dedicated `linmon` user provides isolation from other system services using `nobody` (UID 65534)
+- Dedicated `linmon` user provides isolation from other system services instead of using the shared `nobody` account
 - Prevents shared UID attacks where compromised containers/services could interfere with daemon
 
 ### 2. Capability Retention (After UID/GID Drop)
@@ -206,7 +206,7 @@ Based on strace analysis, LinMon requires the following syscalls:
 - `perf_event_open` - Attach to kernel tracepoints
 
 **Privilege Management**:
-- `setuid`, `setgid` - Drop to nobody user
+- `setuid`, `setgid` - Drop to the dedicated linmon user
 - `capset`, `capget` - Manage capabilities
 - `setrlimit` - Set resource limits
 
@@ -531,7 +531,7 @@ sudo chmod 0644 /etc/logrotate.d/linmond
 
 # 7. Verify privilege drop
 sudo journalctl -u linmond -n 20
-# Look for: "✓ Dropped to UID/GID 65534 (nobody)"
+# Look for: "✓ Dropped to UID/GID ... (linmon)"
 #           "✓ Dropped all capabilities"
 ```
 
@@ -555,7 +555,7 @@ Configuration:
   UID range: 1000-0 (0=unlimited)
 ...
 ✓ All monitoring programs attached
-✓ Dropped to UID/GID 65534 (nobody)
+✓ Dropped to UID/GID ... (linmon)
 ✓ Dropped all capabilities (running with minimal privileges)
 Monitoring active.
 ```

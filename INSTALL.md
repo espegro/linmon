@@ -192,11 +192,11 @@ sudo ./install.sh
 **What `install.sh` does**:
 
 1. **Detects distribution**:
-   - Auto-detects `nogroup` (Ubuntu) vs `nobody` (RHEL) group
+   - Creates/uses the dedicated `linmon` system user and group
 
 2. **Creates directories**:
-   - `/var/log/linmon` - Log directory (owner: `nobody:nogroup`, mode: `0750`)
-   - `/var/cache/linmon` - Cache directory (owner: `nobody:nogroup`, mode: `0750`)
+   - `/var/log/linmon` - Log directory (owner: `linmon:linmon`, mode: `0750`)
+   - `/var/cache/linmon` - Cache directory (owner: `linmon:linmon`, mode: `0750`)
    - `/etc/linmon` - Config directory (owner: `root:root`)
 
 3. **Installs files**:
@@ -224,7 +224,7 @@ sudo make install
 - Same as `install.sh` but without interactive prompts
 - Creates all directories with proper permissions
 - Installs binary, config, systemd service, logrotate
-- Auto-detects `nogroup` vs `nobody` group
+- Uses the dedicated `linmon` system user and group
 - Runs `systemctl daemon-reload`
 
 **Note**: Does NOT start or enable the service automatically.
@@ -244,11 +244,8 @@ sudo mkdir -p /var/log/linmon
 sudo mkdir -p /var/cache/linmon
 sudo mkdir -p /etc/linmon
 
-# Ubuntu/Debian:
-sudo chown nobody:nogroup /var/log/linmon /var/cache/linmon
-
-# RHEL/Rocky:
-sudo chown nobody:nobody /var/log/linmon /var/cache/linmon
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin linmon 2>/dev/null || true
+sudo chown linmon:linmon /var/log/linmon /var/cache/linmon
 
 # Set permissions
 sudo chmod 0750 /var/log/linmon /var/cache/linmon
@@ -276,11 +273,7 @@ sudo systemctl daemon-reload
 
 #### 5. Install Logrotate Config (Optional)
 ```bash
-# Ubuntu/Debian:
-sudo sed 's/nobody nogroup/nobody nogroup/' linmond.logrotate > /etc/logrotate.d/linmond
-
-# RHEL/Rocky:
-sudo sed 's/nobody nogroup/nobody nobody/' linmond.logrotate > /etc/logrotate.d/linmond
+sudo sed 's/nobody nogroup/linmon linmon/' linmond.logrotate > /etc/logrotate.d/linmond
 
 sudo chmod 0644 /etc/logrotate.d/linmond
 ```

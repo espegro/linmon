@@ -425,7 +425,7 @@ LinMon implements defense-in-depth security. See `SECURITY.md` for full details.
    - Raises ambient capability: `prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SYS_PTRACE)`
    - Sets securebits: `SECBIT_KEEP_CAPS` + `SECBIT_NO_SETUID_FIXUP` (both locked)
    - Prevents capability clearing on setuid()
-4. **Drop UID/GID** to `nobody:nogroup` (UID/GID 65534) - requires `CAP_SETUID`/`CAP_SETGID`
+4. **Drop UID/GID** to the dedicated `linmon:linmon` account - requires `CAP_SETUID`/`CAP_SETGID`
 5. **Drop dangerous capabilities** - Remove CAP_SETUID and CAP_SETGID from PERMITTED and EFFECTIVE
    - Prevents regaining root privileges
    - Retains only CAP_SYS_PTRACE (for reading `/proc/<pid>/exe` across users)
@@ -442,7 +442,7 @@ After privilege drop, daemon **cannot**:
 - Implementation: Ambient capabilities (kernel >= 4.3)
 - Usage: Daemon only uses for read-only `/proc` access (readlink, stat, open)
 - Risk: Capability DOES permit ptrace(2) syscalls if daemon code is compromised
-- Mitigation: Daemon runs as UID 65534 (nobody), minimal attack surface, no viable alternative
+- Mitigation: Daemon runs as a dedicated unprivileged `linmon` user, minimal attack surface
 
 ### Configuration Security
 
@@ -483,13 +483,10 @@ On SIGHUP, LinMon will:
 
 LinMon has special handling for different Linux distributions:
 
-### Group Name Detection
+### Dedicated Service Account
 
-Different distros use different group names for the unprivileged user:
-- **Debian/Ubuntu**: `nobody:nogroup`
-- **RHEL/Rocky/CentOS/AlmaLinux**: `nobody:nobody`
-
-The Makefile and `install.sh` auto-detect the correct group using `getent group nogroup`.
+The installer creates and uses the dedicated `linmon:linmon` system account on all
+supported distributions. This avoids sharing the `nobody` UID with unrelated services.
 
 ### RHEL 9 Specific Adaptations
 

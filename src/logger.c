@@ -512,6 +512,11 @@ static void json_escape(const char *src, char *dst, size_t dst_size)
     dst[j] = '\0';
 }
 
+void logger_json_escape(const char *src, char *dst, size_t dst_size)
+{
+    json_escape(src, dst, dst_size);
+}
+
 static void format_timestamp(char *buf, size_t size)
 {
     struct timespec ts;

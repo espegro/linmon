@@ -41,16 +41,17 @@
 #define PR_CAP_AMBIENT_RAISE 2
 #endif
 
-static volatile bool exiting = false;
-static volatile bool reload_config = false;
+static volatile sig_atomic_t exiting = 0;
+static volatile sig_atomic_t reload_config = 0;
 
 static struct linmon_config global_config = {0};
 static const char *config_path = "/etc/linmon/linmon.conf";
 
 // Signal information for tamper detection logging
 static volatile sig_atomic_t last_signal = 0;
-static volatile pid_t signal_sender_pid = 0;
-static volatile uid_t signal_sender_uid = 0;
+static volatile sig_atomic_t signal_sender_pid = 0;
+static volatile sig_atomic_t signal_sender_uid = 0;
+static volatile sig_atomic_t rejected_signal = 0;
 
 // Integrity monitoring - daemon and config hashes
 static char daemon_binary_path[PATH_MAX];
@@ -63,7 +64,6 @@ static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
 {
     (void)ucontext;
 
-    last_signal = sig;
     if (info) {
         signal_sender_pid = info->si_pid;
         signal_sender_uid = info->si_uid;
@@ -72,18 +72,20 @@ static void sig_handler_info(int sig, siginfo_t *info, void *ucontext)
     // Validate sender for security-critical signals
     if (sig == SIGHUP || sig == SIGTERM) {
         if (info && info->si_uid != 0) {
-            // Log rejection with full context for forensics
-            syslog(LOG_WARNING, "SECURITY: Rejected signal %d from unauthorized UID %d (PID %d)",
-                   sig, (int)info->si_uid, (int)info->si_pid);
+            // Signal handlers must only perform async-signal-safe operations.
+            // The main loop emits the forensic log entry.
+            rejected_signal = sig;
             return;  // Ignore signal
         }
     }
 
     // Process authorized signal
     if (sig == SIGINT || sig == SIGTERM) {
-        exiting = true;
+        last_signal = sig;
+        exiting = 1;
     } else if (sig == SIGHUP) {
-        reload_config = true;
+        last_signal = sig;
+        reload_config = 1;
     }
 }
 
@@ -1581,6 +1583,15 @@ int main(int argc, char **argv)
 
     // Main event loop - poll for events
     while (!exiting) {
+        if (rejected_signal) {
+            sig_atomic_t rejected = rejected_signal;
+            rejected_signal = 0;
+            syslog(LOG_WARNING,
+                   "SECURITY: Rejected signal %d from unauthorized UID %d (PID %d)",
+                   (int)rejected, (int)signal_sender_uid,
+                   (int)signal_sender_pid);
+        }
+
         // Check for config reload
         if (reload_config) {
             // Recalculate config hash before reload (tamper detection)
@@ -1638,6 +1649,11 @@ int main(int argc, char **argv)
             // Atomically swap logger (close old, use new)
             // This ensures handle_event() never sees NULL log_fp
             logger_replace(new_log_fp);
+
+            // Apply rotation settings as part of the same reload.
+            logger_set_rotation(new_log_file, global_config.log_rotate,
+                                global_config.log_rotate_size,
+                                global_config.log_rotate_count);
 
             // Update logger enrichment options
             logger_set_enrichment(global_config.resolve_usernames,

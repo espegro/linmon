@@ -445,6 +445,13 @@ static void log_auth_integrity_violation(const char *file_path,
 
     // Get sequence number (atomic)
     uint64_t seq = logger_get_next_sequence();
+    char hostname_escaped[sizeof(hostname) * 2 + 1] = {0};
+    char file_path_escaped[PATH_MAX * 2 + 1] = {0};
+    char package_escaped[PKG_NAME_MAX * 2 + 1] = {0};
+
+    logger_json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
+    logger_json_escape(file_path, file_path_escaped, sizeof(file_path_escaped));
+    logger_json_escape(package_name, package_escaped, sizeof(package_escaped));
 
     fprintf(log_fp, "{\"seq\":%lu,"
                    "\"timestamp\":\"%s\","
@@ -455,11 +462,11 @@ static void log_auth_integrity_violation(const char *file_path,
                    "\"attack_name\":\"Modify Authentication Process\","
                    "\"file_path\":\"%s\","
                    "\"verdict\":\"%s\"",
-           seq, timestamp, hostname, severity, file_path, verdict);
+           seq, timestamp, hostname_escaped, severity, file_path_escaped, verdict);
 
     if (from_package) {
         fprintf(log_fp, ",\"package\":\"%s\",\"modified\":%s",
-                package_name, modified ? "true" : "false");
+                package_escaped, modified ? "true" : "false");
     } else {
         fprintf(log_fp, ",\"package\":null");
     }

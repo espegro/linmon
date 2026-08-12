@@ -34,7 +34,7 @@ This will:
 
 ## Test Coverage
 
-### test_filter.c (66 tests)
+### test_filter.c (71 tests)
 Tests the event filtering and sensitive data redaction system.
 
 **Redaction Tests:**
@@ -79,7 +79,7 @@ Tests JSON escaping for safe event logging.
 - Double escaping
 - High-bit characters (UTF-8 pass-through)
 
-### test_config.c (86 tests)
+### test_config.c (89 tests)
 Tests configuration file parsing and validation.
 
 **Parsing Tests:**
@@ -107,7 +107,7 @@ Tests configuration file parsing and validation.
 - Cache configuration
 - Security monitoring flags (14 MITRE ATT&CK techniques)
 
-### test_procfs.c (53 tests)
+### test_procfs.c (54 tests)
 Tests /proc filesystem reading with focus on buffer safety.
 
 **cmdline Tests:**
@@ -160,11 +160,12 @@ print_test_summary();  // At end of main()
 
 ## Test Statistics
 
-**Total**: 266 tests across 4 test suites
-- test_filter: 66 tests
+**Total**: 283 tests across 5 test suites
+- test_filter: 71 tests
 - test_logger: 47 tests
-- test_config: 86 tests
-- test_procfs: 53 tests
+- test_config: 89 tests
+- test_procfs: 54 tests
+- test_utils: 22 tests
 
 **Completion Status**: ✅ All tests passing
 

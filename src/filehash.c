@@ -348,14 +348,20 @@ int filehash_save(void)
 int filehash_load(void)
 {
     FILE *fp;
+    struct stat st;
     char line[PATH_MAX_LEN + SHA256_HEX_LEN + 128];
     int loaded = 0;
 
-    fp = fopen(cache_file_path, "r");
+    fp = safe_fopen_readonly(cache_file_path, &st);
     if (!fp) {
         if (errno == ENOENT)
             return 0;  // No cache file yet
         return -errno;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        fclose(fp);
+        return -EPERM;
     }
 
     pthread_mutex_lock(&cache_mutex);
