@@ -17,6 +17,7 @@
 #include <syslog.h>
 
 #include "logger.h"
+#include "json.h"
 #include "userdb.h"
 #include "filehash.h"
 #include "pkgcache.h"
@@ -448,75 +449,6 @@ static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t
     return (process_name_out[0] != '\0');
 }
 
-// Escape special characters for JSON strings
-static void json_escape(const char *src, char *dst, size_t dst_size)
-{
-    size_t j = 0;
-
-    if (!src || !dst || dst_size == 0)
-        return;
-
-    for (size_t i = 0; src[i] && j < dst_size - 1; i++) {
-        unsigned char c = src[i];
-
-        // Check if we have room for escape sequence
-        if (j >= dst_size - 6)
-            break;
-
-        switch (c) {
-        case '"':
-            dst[j++] = '\\';
-            dst[j++] = '"';
-            break;
-        case '\\':
-            dst[j++] = '\\';
-            dst[j++] = '\\';
-            break;
-        case '\b':
-            dst[j++] = '\\';
-            dst[j++] = 'b';
-            break;
-        case '\f':
-            dst[j++] = '\\';
-            dst[j++] = 'f';
-            break;
-        case '\n':
-            dst[j++] = '\\';
-            dst[j++] = 'n';
-            break;
-        case '\r':
-            dst[j++] = '\\';
-            dst[j++] = 'r';
-            break;
-        case '\t':
-            dst[j++] = '\\';
-            dst[j++] = 't';
-            break;
-        default:
-            // Control characters - escape as \uXXXX
-            if (c < 0x20) {
-                // Ensure we have room for full escape sequence
-                if (j + 6 >= dst_size)
-                    break;
-                int written = snprintf(dst + j, dst_size - j, "\\u%04x", c);
-                if (written > 0 && written < (int)(dst_size - j))
-                    j += written;
-                else
-                    break;  // snprintf failed or would truncate
-            } else {
-                dst[j++] = c;
-            }
-            break;
-        }
-    }
-    dst[j] = '\0';
-}
-
-void logger_json_escape(const char *src, char *dst, size_t dst_size)
-{
-    json_escape(src, dst, dst_size);
-}
-
 static void format_timestamp(char *buf, size_t size)
 {
     struct timespec ts;
@@ -528,7 +460,7 @@ static void format_timestamp(char *buf, size_t size)
 
     // Get current wall-clock time
     clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &tm_info);
+    gmtime_r(&ts.tv_sec, &tm_info);
 
     // Format with millisecond precision
     // Format: YYYY-MM-DDTHH:MM:SS.mmmZ (25 chars + null = 26)
@@ -1881,7 +1813,7 @@ bool logger_check_file_deleted(void)
 
     // Format timestamp
     clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &tm_info);
+    gmtime_r(&ts.tv_sec, &tm_info);
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm_info);
     snprintf(timestamp + strlen(timestamp), sizeof(timestamp) - strlen(timestamp),
              ".%03ldZ", ts.tv_nsec / 1000000);

@@ -264,6 +264,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <errno.h>
 #include <unistd.h>
 #include <time.h>
 #include <syslog.h>
@@ -273,6 +274,8 @@
 #include "filehash.h"
 #include "pkgcache.h"
 #include "logger.h"
+#include "utils.h"
+#include "json.h"
 
 // Critical authentication files to monitor
 //
@@ -311,6 +314,64 @@ static const char *critical_files[] = {
 };
 
 static bool verify_packages_enabled = false;
+static char baseline_hashes[10][SHA256_HEX_LEN];
+static const char *baseline_path = "/var/cache/linmon/auth-baseline.cache";
+
+static int baseline_index(const char *path)
+{
+    for (int i = 0; critical_files[i] != NULL; i++)
+        if (strcmp(path, critical_files[i]) == 0)
+            return i;
+    return -1;
+}
+
+static int load_baselines(void)
+{
+    struct stat st;
+    char line[PATH_MAX + SHA256_HEX_LEN + 4];
+    FILE *fp = safe_fopen_readonly(baseline_path, &st);
+    if (!fp)
+        return errno == ENOENT ? 0 : -errno;
+    if (!S_ISREG(st.st_mode)) {
+        fclose(fp);
+        return -EPERM;
+    }
+    while (fgets(line, sizeof(line), fp)) {
+        char path[PATH_MAX], hash[SHA256_HEX_LEN];
+        if (sscanf(line, "%4095[^|]|%64s", path, hash) == 2) {
+            int idx = baseline_index(path);
+            if (idx >= 0)
+                snprintf(baseline_hashes[idx], sizeof(baseline_hashes[idx]), "%s", hash);
+        }
+    }
+    fclose(fp);
+    return 0;
+}
+
+static int save_baselines(void)
+{
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", baseline_path);
+    FILE *fp = safe_fopen(tmp, "w", 0600);
+    if (!fp)
+        return -errno;
+    if (fprintf(fp, "# LinMon auth baseline v1\n") < 0) {
+        int saved = errno; fclose(fp); unlink(tmp); return -saved;
+    }
+    for (int i = 0; critical_files[i] != NULL; i++) {
+        if (baseline_hashes[i][0] &&
+            fprintf(fp, "%s|%s\n", critical_files[i], baseline_hashes[i]) < 0) {
+            int saved = errno; fclose(fp); unlink(tmp); return -saved;
+        }
+    }
+    if (fclose(fp) != 0) {
+        int saved = errno; unlink(tmp); return -saved;
+    }
+    if (rename(tmp, baseline_path) != 0) {
+        int saved = errno; unlink(tmp); return -saved;
+    }
+    return 0;
+}
 
 // Initialize authentication integrity monitoring
 //
@@ -333,7 +394,14 @@ static bool verify_packages_enabled = false;
 //   - User may want to disable package verification for performance
 //   - File hashing still happens (useful for change detection)
 //
-void authcheck_init(bool verify_packages)
+int authcheck_init(bool verify_packages)
+{
+    verify_packages_enabled = verify_packages;
+    memset(baseline_hashes, 0, sizeof(baseline_hashes));
+    return load_baselines();
+}
+
+void authcheck_set_package_verification(bool verify_packages)
 {
     verify_packages_enabled = verify_packages;
 }
@@ -392,6 +460,7 @@ void authcheck_init(bool verify_packages)
 static void log_auth_integrity_violation(const char *file_path,
                                          const char *actual_hash,
                                          const char *package_name,
+                                         const char *verdict_override,
                                          bool modified,
                                          bool from_package)
 {
@@ -402,7 +471,7 @@ static void log_auth_integrity_violation(const char *file_path,
 
     // Format timestamp
     clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &tm_info);
+    gmtime_r(&ts.tv_sec, &tm_info);
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm_info);
     snprintf(timestamp + strlen(timestamp), sizeof(timestamp) - strlen(timestamp),
              ".%03ldZ", ts.tv_nsec / 1000000);
@@ -417,7 +486,10 @@ static void log_auth_integrity_violation(const char *file_path,
     const char *severity;
     const char *verdict;
 
-    if (!from_package) {
+    if (verdict_override) {
+        severity = "CRITICAL";
+        verdict = verdict_override;
+    } else if (!from_package) {
         severity = "CRITICAL";
         verdict = "not_in_package_database";
     } else if (modified) {
@@ -449,9 +521,9 @@ static void log_auth_integrity_violation(const char *file_path,
     char file_path_escaped[PATH_MAX * 2 + 1] = {0};
     char package_escaped[PKG_NAME_MAX * 2 + 1] = {0};
 
-    logger_json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
-    logger_json_escape(file_path, file_path_escaped, sizeof(file_path_escaped));
-    logger_json_escape(package_name, package_escaped, sizeof(package_escaped));
+    json_escape(hostname, hostname_escaped, sizeof(hostname_escaped));
+    json_escape(file_path, file_path_escaped, sizeof(file_path_escaped));
+    json_escape(package_name, package_escaped, sizeof(package_escaped));
 
     fprintf(log_fp, "{\"seq\":%lu,"
                    "\"timestamp\":\"%s\","
@@ -567,6 +639,7 @@ static void log_auth_integrity_violation(const char *file_path,
 int authcheck_verify_all(void)
 {
     int violations = 0;
+    bool baseline_changed = false;
     char hash[SHA256_HEX_LEN];
     struct pkg_info pkg;
 
@@ -588,31 +661,42 @@ int authcheck_verify_all(void)
             continue;
         }
 
-        // If package verification is disabled, we can only log the hash
-        // (no baseline to compare against)
-        if (!verify_packages_enabled)
-            continue;
+        int idx = baseline_index(path);
+        bool first_seen = idx < 0 || baseline_hashes[idx][0] == '\0';
+        bool changed = !first_seen && strcmp(baseline_hashes[idx], hash) != 0;
+        bool authentication_binary = idx >= 0 && idx < 4;
 
-        // Look up package information
-        int ret = pkgcache_lookup(path, &pkg);
-        if (ret != 0) {
-            // Package lookup failed - treat as warning
-            syslog(LOG_WARNING, "authcheck: failed to lookup package for %s", path);
-            continue;
+        memset(&pkg, 0, sizeof(pkg));
+        if (verify_packages_enabled) {
+            int ret = pkgcache_verify(path, &pkg);
+            if (ret != 0)
+                pkg.integrity = PKG_INTEGRITY_UNVERIFIABLE;
         }
 
-        // Check for violations
-        if (!pkg.from_package) {
-            // Critical file is not from package - VERY suspicious
-            log_auth_integrity_violation(path, hash, "", false, false);
+        // A package checksum mismatch is authoritative. The baseline suppresses
+        // repeated alerts for the same observed hash without hiding a new change.
+        if (pkg.integrity == PKG_INTEGRITY_MODIFIED &&
+            (changed || (first_seen && authentication_binary))) {
+            log_auth_integrity_violation(path, hash, pkg.package, NULL, true, true);
             violations++;
-        } else if (pkg.modified) {
-            // File has been modified since package installation
-            log_auth_integrity_violation(path, hash, pkg.package, true, true);
+        } else if (changed && pkg.integrity != PKG_INTEGRITY_VERIFIED) {
+            // Generated configs and manually installed files use a persistent
+            // trust-on-first-use baseline. A change is logged once, then becomes
+            // the new baseline to avoid periodic alert storms.
+            log_auth_integrity_violation(path, hash, pkg.package,
+                                         "baseline_changed", false,
+                                         pkg.from_package);
             violations++;
         }
-        // If from_package && !modified: All good, no logging (sparse events)
+
+        if (idx >= 0 && (first_seen || changed)) {
+            snprintf(baseline_hashes[idx], sizeof(baseline_hashes[idx]), "%s", hash);
+            baseline_changed = true;
+        }
     }
+
+    if (baseline_changed && save_baselines() != 0)
+        syslog(LOG_WARNING, "authcheck: failed to persist integrity baseline");
 
     return violations;
 }

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-08-12
+
+### Fixed
+
+- Verified package-owned authentication files against installed `dpkg`/`rpm`
+  checksums instead of treating package ownership as proof of integrity.
+- Added persistent first-seen baselines for authentication configuration and
+  manually installed binaries, preventing false critical alerts for legitimate
+  local configuration while still reporting subsequent changes. Package-owned
+  authentication binaries remain checksum-verified on first inspection.
+- Made configuration reload transactional for eBPF settings and CIDR filters,
+  removed stale CIDR map entries, and reconfigured enrichment caches and auth checks.
+- Emitted timestamps marked with `Z` in UTC rather than local time.
+- Isolated security detections from ordinary telemetry rate limiting.
+- Rebuilt daemon objects when `VERSION` changes and tested JSON escaping against
+  its production implementation.
+
 ## [1.9.0] - 2026-08-12
 
 ### Fixed

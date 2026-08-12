@@ -52,6 +52,15 @@ struct {
     __type(value, struct rate_limit_state);
 } rate_limit_map SEC(".maps");
 
+// Security detections must not be starved by high-volume telemetry from the
+// same UID, so they use an independent and more generous token bucket.
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u32);
+    __type(value, struct rate_limit_state);
+} security_rate_limit_map SEC(".maps");
+
 // Network CIDR filtering map - stores up to 16 CIDR blocks to ignore
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -109,6 +118,41 @@ static __always_inline bool should_rate_limit(__u32 uid)
     // Consume one token
     state->tokens--;
     bpf_map_update_elem(&rate_limit_map, &uid, state, BPF_ANY);
+    return false;
+}
+
+#define SECURITY_RATE_LIMIT_MAX_TOKENS 200
+#define SECURITY_RATE_LIMIT_REFILL_INTERVAL_NS 1000000ULL
+
+static __always_inline bool should_rate_limit_security(__u32 uid)
+{
+    __u64 now = bpf_ktime_get_ns();
+    struct rate_limit_state *state;
+    struct rate_limit_state new_state;
+    __u64 elapsed;
+    __u32 new_tokens;
+
+    state = bpf_map_lookup_elem(&security_rate_limit_map, &uid);
+    if (!state) {
+        new_state.last_refill = now;
+        new_state.tokens = SECURITY_RATE_LIMIT_MAX_TOKENS - 1;
+        bpf_map_update_elem(&security_rate_limit_map, &uid, &new_state, BPF_ANY);
+        return false;
+    }
+
+    elapsed = now - state->last_refill;
+    new_tokens = elapsed / SECURITY_RATE_LIMIT_REFILL_INTERVAL_NS;
+    if (new_tokens > 0) {
+        state->tokens += new_tokens;
+        if (state->tokens > SECURITY_RATE_LIMIT_MAX_TOKENS)
+            state->tokens = SECURITY_RATE_LIMIT_MAX_TOKENS;
+        state->last_refill = now;
+    }
+    if (state->tokens == 0)
+        return true;
+
+    state->tokens--;
+    bpf_map_update_elem(&security_rate_limit_map, &uid, state, BPF_ANY);
     return false;
 }
 
@@ -1477,7 +1521,7 @@ static __always_inline int handle_ptrace_common(long request, __u32 target_pid)
         return 0;
 
     // Rate limiting
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -1662,7 +1706,7 @@ static __always_inline int handle_memfd_common(const char *name, unsigned int fl
         return 0;
 
     // Rate limiting
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -1725,7 +1769,7 @@ static __always_inline int handle_bind_common(int fd, struct sockaddr *addr, int
         return 0;
 
     // Rate limiting
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     // Read address family
@@ -1818,7 +1862,7 @@ static __always_inline int handle_unshare_common(unsigned long flags)
         return 0;
 
     // Rate limiting
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     // Only log if namespace-related flags are set
@@ -1883,7 +1927,7 @@ static __always_inline int handle_execveat_common(int dirfd, const char *pathnam
         return 0;
 
     // Rate limiting
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
@@ -1959,7 +2003,7 @@ static __always_inline int handle_bpf_common(int cmd, unsigned int attr_size)
     // But we still want to log all BPF program loads for auditing
 
     // Rate limiting
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     // Only log interesting commands
@@ -2235,6 +2279,8 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
         // Only interested in writes (O_WRONLY, O_RDWR, O_CREAT, O_TRUNC)
         if (flags & (O_WRONLY | O_RDWR | O_CREAT | O_TRUNC)) {
             uid = bpf_get_current_uid_gid();
+            if (should_rate_limit_security(uid))
+                return 0;
             
             struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
             if (!event)
@@ -2271,7 +2317,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
         uid = bpf_get_current_uid_gid();
 
         // Rate limit
-        if (should_rate_limit(uid))
+        if (should_rate_limit_security(uid))
             return 0;
 
         // Log credential file write
@@ -2306,7 +2352,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
         uid = bpf_get_current_uid_gid();
 
         // Rate limit
-        if (should_rate_limit(uid))
+        if (should_rate_limit_security(uid))
             return 0;
 
         // Check if this is a whitelisted log manager
@@ -2353,7 +2399,7 @@ static __always_inline int handle_security_openat(int dfd, const char *pathname,
     uid = bpf_get_current_uid_gid();
     
     // Rate limit
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
     
     // Get process name and check whitelist
@@ -2426,7 +2472,7 @@ static __always_inline int handle_fchmodat_common(int dfd, const char *pathname,
     uid = bpf_get_current_uid_gid();
 
     // Rate limiting check
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     // Reserve event
@@ -2607,7 +2653,7 @@ static __always_inline int handle_persistence_openat(int dfd, const char *pathna
     uid = bpf_get_current_uid_gid();
 
     // Rate limiting check
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     // Reserve event
@@ -2780,7 +2826,7 @@ static __always_inline int handle_raw_disk_openat(int dfd, const char *pathname,
     uid = bpf_get_current_uid_gid();
 
     // Rate limiting check
-    if (should_rate_limit(uid))
+    if (should_rate_limit_security(uid))
         return 0;
 
     // Reserve event

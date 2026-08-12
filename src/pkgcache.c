@@ -27,6 +27,7 @@ struct cache_entry {
     time_t cached_at;  // When this entry was cached (for TTL)
     char package[PKG_NAME_MAX];
     bool from_package;
+    enum pkg_integrity_status integrity;
     struct cache_entry *next;  // Hash chain
 };
 
@@ -285,7 +286,8 @@ static int try_package_query(const char *query_path, char *buf, size_t buflen)
 // Returns package name in buf, or empty string if not from package
 // Handles UsrMerge systems where /usr/bin/foo is hardlinked to /bin/foo
 // but only /bin/foo is in the package database
-static int query_package_manager(const char *path, char *buf, size_t buflen)
+static int query_package_manager(const char *path, char *buf, size_t buflen,
+                                 char *owned_path, size_t owned_path_len)
 {
 	char normalized_path[PKG_PATH_MAX];
 	char realpath_buf[PKG_PATH_MAX];
@@ -305,14 +307,18 @@ static int query_package_manager(const char *path, char *buf, size_t buflen)
 	// Try 1: Normalized path (handles UsrMerge)
 	query_path = normalize_usrmerge_path(path, normalized_path, sizeof(normalized_path));
 	ret = try_package_query(query_path, buf, buflen);
-	if (ret == 0)
+	if (ret == 0) {
+		snprintf(owned_path, owned_path_len, "%s", query_path);
 		return 0;  // Success
+	}
 
 	// Try 2: Original path (if different from normalized)
 	if (query_path != path) {
 		ret = try_package_query(path, buf, buflen);
-		if (ret == 0)
+		if (ret == 0) {
+			snprintf(owned_path, owned_path_len, "%s", path);
 			return 0;  // Success
+		}
 	}
 
 	// Try 3: Realpath fallback (resolves symlinks, handles hardlinks)
@@ -321,13 +327,91 @@ static int query_package_manager(const char *path, char *buf, size_t buflen)
 		if (strcmp(realpath_buf, path) != 0 &&
 		    strcmp(realpath_buf, query_path) != 0) {
 			ret = try_package_query(realpath_buf, buf, buflen);
-			if (ret == 0)
+			if (ret == 0) {
+				snprintf(owned_path, owned_path_len, "%s", realpath_buf);
 				return 0;  // Success
+			}
 		}
 	}
 
 	// All attempts failed
 	return -1;
+}
+
+// Verify one package-owned file using the package manager's installed checksums.
+// dpkg --verify emits RPM-style lines only for mismatches; rpm -Vf does the same.
+static enum pkg_integrity_status verify_package_file(const char *package,
+                                                       const char *owned_path)
+{
+    int pipefd[2], status;
+    pid_t pid;
+    FILE *fp;
+    char line[PKG_PATH_MAX + 64];
+    bool mismatch = false;
+
+    if (!package || !*package || !owned_path || !*owned_path)
+        return PKG_INTEGRITY_UNVERIFIABLE;
+    if (pipe(pipefd) != 0)
+        return PKG_INTEGRITY_UNVERIFIABLE;
+
+    pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]); close(pipefd[1]);
+        return PKG_INTEGRITY_UNVERIFIABLE;
+    }
+    if (pid == 0) {
+        cap_t empty_caps;
+
+        close(pipefd[0]);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0 ||
+            dup2(pipefd[1], STDERR_FILENO) < 0)
+            _exit(127);
+        close(pipefd[1]);
+        if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0)
+            _exit(127);
+        empty_caps = cap_init();
+        if (!empty_caps || cap_set_proc(empty_caps) != 0) {
+            if (empty_caps)
+                cap_free(empty_caps);
+            _exit(127);
+        }
+        cap_free(empty_caps);
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+            _exit(127);
+        if (detected_pkg_manager == PKG_DPKG) {
+            char *args[] = {"/usr/bin/dpkg", "--verify", (char *)package, NULL};
+            execve(args[0], args, NULL);
+        } else if (detected_pkg_manager == PKG_RPM) {
+            char *args[] = {"/usr/bin/rpm", "-Vf", (char *)owned_path, NULL};
+            execve(args[0], args, NULL);
+        }
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    fp = fdopen(pipefd[0], "r");
+    if (!fp) {
+        close(pipefd[0]);
+        waitpid(pid, NULL, 0);
+        return PKG_INTEGRITY_UNVERIFIABLE;
+    }
+    while (fgets(line, sizeof(line), fp)) {
+        size_t line_len = strlen(line);
+        size_t path_len = strlen(owned_path);
+        while (line_len && (line[line_len - 1] == '\n' || line[line_len - 1] == '\r'))
+            line[--line_len] = '\0';
+        if (line_len >= path_len &&
+            strcmp(line + line_len - path_len, owned_path) == 0)
+            mismatch = true;
+    }
+    fclose(fp);
+    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status))
+        return PKG_INTEGRITY_UNVERIFIABLE;
+    if (mismatch)
+        return PKG_INTEGRITY_MODIFIED;
+    if (WEXITSTATUS(status) != 0)
+        return PKG_INTEGRITY_UNVERIFIABLE;
+    return PKG_INTEGRITY_VERIFIED;
 }
 
 // Find or create cache entry
@@ -348,7 +432,8 @@ static struct cache_entry *cache_find(const char *path)
 // Add entry to cache
 static struct cache_entry *cache_add(const char *path, ino_t inode,
                                       time_t mtime, const char *package,
-                                      bool from_package)
+                                      bool from_package,
+                                      enum pkg_integrity_status integrity)
 {
     unsigned int h;
     struct cache_entry *entry;
@@ -372,6 +457,7 @@ static struct cache_entry *cache_add(const char *path, ino_t inode,
     strncpy(entry->package, package, PKG_NAME_MAX - 1);
     entry->package[PKG_NAME_MAX - 1] = '\0';
     entry->from_package = from_package;
+    entry->integrity = integrity;
 
     h = hash_path(path);
     entry->next = hash_table[h];
@@ -383,7 +469,8 @@ static struct cache_entry *cache_add(const char *path, ino_t inode,
 
 // Update existing entry
 static void cache_update(struct cache_entry *entry, ino_t inode,
-                         time_t mtime, const char *package, bool from_package)
+                         time_t mtime, const char *package, bool from_package,
+                         enum pkg_integrity_status integrity)
 {
     entry->inode = inode;
     entry->mtime = mtime;
@@ -391,6 +478,7 @@ static void cache_update(struct cache_entry *entry, ino_t inode,
     strncpy(entry->package, package, PKG_NAME_MAX - 1);
     entry->package[PKG_NAME_MAX - 1] = '\0';
     entry->from_package = from_package;
+    entry->integrity = integrity;
 }
 
 int pkgcache_init(const char *cache_file, int max_entries)
@@ -414,11 +502,14 @@ int pkgcache_init(const char *cache_file, int max_entries)
     return 0;
 }
 
-int pkgcache_lookup(const char *path, struct pkg_info *info)
+static int pkgcache_lookup_internal(const char *path, struct pkg_info *info,
+                                    bool force_verify)
 {
     struct stat st;
     struct cache_entry *entry;
-    char package[PKG_NAME_MAX];
+    char package[PKG_NAME_MAX] = {0};
+    char owned_path[PKG_PATH_MAX] = {0};
+    enum pkg_integrity_status integrity = PKG_INTEGRITY_UNVERIFIABLE;
     bool needs_lookup = false;
     int ret;
 
@@ -446,7 +537,7 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
         time_t now = time(NULL);
 
         // Check if file has changed (inode or mtime) OR cache expired (TTL)
-        if (entry->inode != st.st_ino || entry->mtime != st.st_mtime ||
+        if (force_verify || entry->inode != st.st_ino || entry->mtime != st.st_mtime ||
             (now - entry->cached_at) > CACHE_TTL) {
             // File changed or cache expired - need to revalidate
             needs_lookup = true;
@@ -457,7 +548,8 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
             strncpy(info->package, entry->package, PKG_NAME_MAX - 1);
             info->package[PKG_NAME_MAX - 1] = '\0';
             info->from_package = entry->from_package;
-            info->modified = false;
+            info->integrity = entry->integrity;
+            info->modified = entry->integrity == PKG_INTEGRITY_MODIFIED;
             pthread_mutex_unlock(&cache_mutex);
             return 0;
         }
@@ -471,9 +563,15 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
 
     if (needs_lookup) {
         // Query package manager (outside mutex - this is slow)
-        ret = query_package_manager(path, package, sizeof(package));
+        ret = query_package_manager(path, package, sizeof(package),
+                                    owned_path, sizeof(owned_path));
+        if (ret == 0 && package[0] != '\0')
+            integrity = verify_package_file(package, owned_path);
 
         pthread_mutex_lock(&cache_mutex);
+        // Re-find after the unlocked package-manager call so concurrent cache
+        // maintenance cannot leave us with a stale entry pointer.
+        entry = cache_find(path);
 
         if (ret == 0 && package[0] != '\0') {
             // File belongs to a package
@@ -481,31 +579,28 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
             strncpy(info->package, package, PKG_NAME_MAX - 1);
             info->package[PKG_NAME_MAX - 1] = '\0';
 
-            // Check if this was previously from a different package
-            // or if it's a revalidation (file was modified)
+            info->integrity = integrity;
+            info->modified = info->integrity == PKG_INTEGRITY_MODIFIED;
             if (entry) {
-                if (strcmp(entry->package, package) != 0) {
-                    // Package changed - suspicious!
-                    info->modified = true;
-                }
-                cache_update(entry, st.st_ino, st.st_mtime, package, true);
+                cache_update(entry, st.st_ino, st.st_mtime, package, true,
+                             info->integrity);
             } else {
-                cache_add(path, st.st_ino, st.st_mtime, package, true);
+                cache_add(path, st.st_ino, st.st_mtime, package, true,
+                          info->integrity);
             }
         } else {
             // File not from a package
             info->from_package = false;
             info->package[0] = '\0';
-
-            // If it was previously from a package, it's been replaced!
-            if (entry && entry->from_package) {
-                info->modified = true;
-            }
+            info->integrity = PKG_INTEGRITY_UNPACKAGED;
+            info->modified = false;
 
             if (entry) {
-                cache_update(entry, st.st_ino, st.st_mtime, "", false);
+                cache_update(entry, st.st_ino, st.st_mtime, "", false,
+                             PKG_INTEGRITY_UNPACKAGED);
             } else {
-                cache_add(path, st.st_ino, st.st_mtime, "", false);
+                cache_add(path, st.st_ino, st.st_mtime, "", false,
+                          PKG_INTEGRITY_UNPACKAGED);
             }
         }
 
@@ -513,6 +608,16 @@ int pkgcache_lookup(const char *path, struct pkg_info *info)
     }
 
     return 0;
+}
+
+int pkgcache_lookup(const char *path, struct pkg_info *info)
+{
+    return pkgcache_lookup_internal(path, info, false);
+}
+
+int pkgcache_verify(const char *path, struct pkg_info *info)
+{
+    return pkgcache_lookup_internal(path, info, true);
 }
 
 int pkgcache_save(void)
@@ -538,21 +643,21 @@ int pkgcache_save(void)
     }
 
     // Write header
-    fprintf(fp, "# LinMon package cache v2\n");
-    fprintf(fp, "# path|inode|mtime|cached_at|package|from_pkg\n");
+    fprintf(fp, "# LinMon package cache v3\n");
+    fprintf(fp, "# path|inode|mtime|cached_at|package|from_pkg|integrity\n");
 
     pthread_mutex_lock(&cache_mutex);
 
     for (i = 0; i < HASH_BUCKETS; i++) {
         struct cache_entry *entry = hash_table[i];
         while (entry) {
-            fprintf(fp, "%s|%lu|%ld|%ld|%s|%d\n",
+            fprintf(fp, "%s|%lu|%ld|%ld|%s|%d|%d\n",
                     entry->path,
                     (unsigned long)entry->inode,
                     (long)entry->mtime,
                     (long)entry->cached_at,
                     entry->package,
-                    entry->from_package ? 1 : 0);
+                    entry->from_package ? 1 : 0, (int)entry->integrity);
             entry = entry->next;
         }
     }
@@ -576,6 +681,7 @@ int pkgcache_load(void)
     struct stat st;
     char line[PKG_PATH_MAX + PKG_NAME_MAX + 64];
     int loaded = 0;
+    bool v3 = false;
 
     fp = safe_fopen_readonly(cache_file_path, &st);
     if (!fp) {
@@ -598,48 +704,40 @@ int pkgcache_load(void)
         char package[PKG_NAME_MAX];
         int from_pkg;
 
-        // Skip comments and empty lines
-        if (line[0] == '#' || line[0] == '\n')
+        if (strncmp(line, "# LinMon package cache v3", 25) == 0) {
+            v3 = true;
+            continue;
+        }
+        // Old cache formats lack integrity state. Ignore them so every entry is
+        // revalidated rather than being treated as clean.
+        if (line[0] == '#' || line[0] == '\n' || !v3)
             continue;
 
-        // Try v2 format first: path|inode|mtime|cached_at|package|from_pkg
-        if (sscanf(line, "%255[^|]|%lu|%ld|%ld|%63[^|]|%d",
-                   path, &inode, &mtime, &cached_at, package, &from_pkg) >= 5) {
-            // Handle empty package field
-            if (strcmp(package, "|") == 0 || package[0] == '\0') {
-                package[0] = '\0';
-            }
-            struct cache_entry *entry = cache_add(path, (ino_t)inode, (time_t)mtime, package, from_pkg != 0);
-            if (entry) {
-                entry->cached_at = (time_t)cached_at;  // Restore cached timestamp
-            }
-            loaded++;
-        }
-        // Try v2 format with empty package: path|inode|mtime|cached_at||from_pkg
-        else if (sscanf(line, "%255[^|]|%lu|%ld|%ld||%d",
-                          path, &inode, &mtime, &cached_at, &from_pkg) == 5) {
-            struct cache_entry *entry = cache_add(path, (ino_t)inode, (time_t)mtime, "", from_pkg != 0);
+        int integrity;
+        if (sscanf(line, "%4095[^|]|%lu|%ld|%ld|%63[^|]|%d|%d",
+                   path, &inode, &mtime, &cached_at, package, &from_pkg,
+                   &integrity) == 7 &&
+            integrity >= PKG_INTEGRITY_UNVERIFIABLE &&
+            integrity <= PKG_INTEGRITY_UNPACKAGED) {
+            struct cache_entry *entry = cache_add(
+                path, (ino_t)inode, (time_t)mtime, package, from_pkg != 0,
+                (enum pkg_integrity_status)integrity);
             if (entry) {
                 entry->cached_at = (time_t)cached_at;
+                loaded++;
             }
-            loaded++;
-        }
-        // Fallback to v1 format: path|inode|mtime|package|from_pkg (backward compat)
-        else if (sscanf(line, "%255[^|]|%lu|%ld|%63[^|]|%d",
-                   path, &inode, &mtime, package, &from_pkg) >= 4) {
-            // Handle empty package field
-            if (strcmp(package, "|") == 0 || package[0] == '\0') {
-                package[0] = '\0';
+        } else if (sscanf(line, "%4095[^|]|%lu|%ld|%ld||%d|%d",
+                          path, &inode, &mtime, &cached_at, &from_pkg,
+                          &integrity) == 6 &&
+                   integrity >= PKG_INTEGRITY_UNVERIFIABLE &&
+                   integrity <= PKG_INTEGRITY_UNPACKAGED) {
+            struct cache_entry *entry = cache_add(
+                path, (ino_t)inode, (time_t)mtime, "", from_pkg != 0,
+                (enum pkg_integrity_status)integrity);
+            if (entry) {
+                entry->cached_at = (time_t)cached_at;
+                loaded++;
             }
-            // No cached_at in v1 - will be set to current time by cache_add
-            cache_add(path, (ino_t)inode, (time_t)mtime, package, from_pkg != 0);
-            loaded++;
-        }
-        // Fallback to v1 format with empty package: path|inode|mtime||from_pkg
-        else if (sscanf(line, "%255[^|]|%lu|%ld||%d",
-                          path, &inode, &mtime, &from_pkg) == 4) {
-            cache_add(path, (ino_t)inode, (time_t)mtime, "", from_pkg != 0);
-            loaded++;
         }
     }
 

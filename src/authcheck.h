@@ -9,7 +9,8 @@
 
 // Initialize authentication integrity monitoring
 // verify_packages: enable package verification (requires pkgcache)
-void authcheck_init(bool verify_packages);
+int authcheck_init(bool verify_packages);
+void authcheck_set_package_verification(bool verify_packages);
 
 // Perform periodic integrity check of all critical authentication files
 // Logs violations to JSON and syslog

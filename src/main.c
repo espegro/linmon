@@ -101,7 +101,7 @@ static void log_daemon_event(const char *event_type, const char *message,
 
     // Format timestamp
     clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &tm_info);
+    gmtime_r(&ts.tv_sec, &tm_info);
     strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", &tm_info);
     snprintf(timestamp + strlen(timestamp), sizeof(timestamp) - strlen(timestamp),
              ".%03ldZ", ts.tv_nsec / 1000000);
@@ -649,8 +649,12 @@ static int update_network_filters(int map_fd, const struct linmon_config *config
     __u32 index = 0;
     int err;
 
-    // Clear existing entries by creating a new map
-    // (BPF maps can't be cleared, so we just overwrite)
+    // Remove every previous slot first. Merely overwriting active indices leaves
+    // stale entries when a reload shortens or disables the CIDR list.
+    for (__u32 old_index = 0; old_index < 16; old_index++) {
+        if (bpf_map_delete_elem(map_fd, &old_index) != 0 && errno != ENOENT)
+            return -errno;
+    }
 
     if (!config->ignore_networks || strlen(config->ignore_networks) == 0)
         return 0;  // No networks to filter
@@ -1072,7 +1076,10 @@ int main(int argc, char **argv)
 
     // Initialize authentication integrity monitoring
     if (global_config.monitor_auth_integrity) {
-        authcheck_init(global_config.verify_packages);
+        err = authcheck_init(global_config.verify_packages);
+        if (err)
+            syslog(LOG_WARNING, "authcheck: failed to load baseline: %s",
+                   strerror(-err));
     }
 
     // Configure logger enrichment options
@@ -1577,8 +1584,18 @@ int main(int argc, char **argv)
     time_t last_logfile_check = time(NULL);
     const int logfile_check_interval = 10;  // Check every 10 seconds
 
-    // Periodic authentication integrity check (T1556.003/004 detection)
+    // Establish/verify the authentication baseline immediately at startup.
+    // Waiting for the first interval leaves a blind window and delays creation
+    // of the trust-on-first-use baseline for generated configuration files.
     time_t last_auth_check = time(NULL);
+    if (global_config.monitor_auth_integrity) {
+        int violations = authcheck_verify_all();
+        if (violations > 0)
+            syslog(LOG_WARNING,
+                   "authcheck: %d integrity violation(s) detected at startup",
+                   violations);
+        last_auth_check = time(NULL);
+    }
     int auth_check_interval = global_config.auth_integrity_interval * 60;  // Convert to seconds
 
     // Main event loop - poll for events
@@ -1627,20 +1644,56 @@ int main(int argc, char **argv)
                 continue;
             }
 
-            // Update global config
+            // Apply kernel-side state before committing userspace state. If any
+            // step fails, restore the old maps and keep the old configuration.
+            err = update_bpf_config(bpf_map__fd(skel->maps.config_map), &new_config);
+            if (err) {
+                fprintf(stderr, "Failed to update BPF config: %d\n", err);
+                fclose(new_log_fp);
+                free_config(&new_config);
+                reload_config = false;
+                continue;
+            }
+
+            err = update_network_filters(bpf_map__fd(skel->maps.ignore_networks_map), &new_config);
+            if (err) {
+                fprintf(stderr, "Failed to update network filters: %d\n", err);
+                update_bpf_config(bpf_map__fd(skel->maps.config_map), &global_config);
+                update_network_filters(bpf_map__fd(skel->maps.ignore_networks_map), &global_config);
+                fclose(new_log_fp);
+                free_config(&new_config);
+                reload_config = false;
+                continue;
+            }
+
+            bool old_hash_binaries = global_config.hash_binaries;
+            bool old_verify_packages = global_config.verify_packages;
+            bool old_monitor_auth = global_config.monitor_auth_integrity;
+
             free_config(&global_config);
             global_config = new_config;
 
-            // Update BPF config map
-            err = update_bpf_config(bpf_map__fd(skel->maps.config_map), &global_config);
-            if (err) {
-                fprintf(stderr, "Warning: Failed to update BPF config: %d\n", err);
-            }
+            if (old_hash_binaries)
+                filehash_cleanup();
+            if (global_config.hash_binaries)
+                filehash_init(global_config.hash_cache_file,
+                              global_config.hash_cache_size);
 
-            // Update network CIDR filtering
-            err = update_network_filters(bpf_map__fd(skel->maps.ignore_networks_map), &global_config);
-            if (err) {
-                fprintf(stderr, "Warning: Failed to update network filters: %d\n", err);
+            if (old_verify_packages)
+                pkgcache_cleanup();
+            if (global_config.verify_packages)
+                pkgcache_init(global_config.pkg_cache_file,
+                              global_config.pkg_cache_size);
+
+            if (global_config.monitor_auth_integrity) {
+                if (!old_monitor_auth ||
+                    old_verify_packages != global_config.verify_packages) {
+                    if (authcheck_init(global_config.verify_packages) != 0) {
+                        syslog(LOG_WARNING, "authcheck: failed to reload baseline");
+                    }
+                } else {
+                    authcheck_set_package_verification(global_config.verify_packages);
+                }
             }
 
             // Reinitialize filter

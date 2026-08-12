@@ -33,7 +33,6 @@ void logger_set_rotation(const char *log_file, bool enabled,
 void logger_set_syslog(bool enabled);
 
 // Escape a string for safe inclusion inside a JSON string value.
-void logger_json_escape(const char *src, char *dst, size_t dst_size);
 
 // Replace logger file pointer atomically (for config reload)
 void logger_replace(FILE *new_fp);

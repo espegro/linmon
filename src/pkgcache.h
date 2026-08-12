@@ -23,11 +23,19 @@
 // Default save interval in seconds
 #define PKG_CACHE_SAVE_INTERVAL 300  // 5 minutes
 
+enum pkg_integrity_status {
+    PKG_INTEGRITY_UNVERIFIABLE = 0,
+    PKG_INTEGRITY_VERIFIED,
+    PKG_INTEGRITY_MODIFIED,
+    PKG_INTEGRITY_UNPACKAGED,
+};
+
 // Package info result
 struct pkg_info {
     char package[PKG_NAME_MAX];  // Package name, empty string if not from package
     bool from_package;           // true if file belongs to a known package
     bool modified;               // true if file was modified since package install
+    enum pkg_integrity_status integrity;
 };
 
 // Initialize the package cache
@@ -41,6 +49,9 @@ int pkgcache_init(const char *cache_file, int max_entries);
 // info: output structure for package information
 // Returns 0 on success, negative errno on failure
 int pkgcache_lookup(const char *path, struct pkg_info *info);
+
+// Bypass the metadata/TTL cache and verify against the package database now.
+int pkgcache_verify(const char *path, struct pkg_info *info);
 
 // Save cache to disk
 // Called periodically and on shutdown
