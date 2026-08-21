@@ -33,7 +33,7 @@ LinMon is a system monitoring service for Linux (Ubuntu/RHEL) that logs interact
 - **Sensitive Data Redaction**: Automatically redact passwords, tokens, API keys from command lines
 - **Binary Hashing**: Optional SHA256 hashing of executed binaries for integrity monitoring
 - **Package Verification**: Check if binaries belong to system packages (dpkg/rpm) with persistent cache
-- **Privilege Dropping**: Daemon runs as dedicated `linmon` system user after BPF load, retains only CAP_SYS_PTRACE for masquerading detection
+- **Privilege Dropping**: Daemon runs as dedicated `linmon` system user after BPF load and, by default, clears all runtime capabilities
 - **Symlink Attack Prevention**: All file operations use `O_NOFOLLOW` to prevent symlink attacks
 - **Process Masquerading Detection**: Detects when processes impersonate other programs via prctl() comm name changes
 - **Deleted Executable Detection**: Identifies fileless malware and post-exploitation cleanup patterns
@@ -201,6 +201,9 @@ LinMon provides pre-configured examples for common use cases. Choose the one tha
 ```bash
 sudo mkdir -p /etc/linmon
 sudo cp examples/configs/server.conf /etc/linmon/linmon.conf
+sudo chown root:linmon /etc/linmon/linmon.conf
+sudo chmod 0640 /etc/linmon/linmon.conf
+sudo linmond --check-config -c /etc/linmon/linmon.conf
 sudo systemctl reload linmond
 ```
 
@@ -230,6 +233,8 @@ Key configuration options:
 - `log_rotate_size=100M` - Max file size before rotation (K/M/G suffixes)
 - `log_rotate_count=10` - Number of rotated files to keep
 - `log_to_syslog=false` - Also log all events to syslog/journald (for SIEM integration)
+- `allow_degraded_monitoring=false` - Abort if a required BPF monitor cannot attach
+- `retain_sys_ptrace=false` - Clear all capabilities after startup (recommended)
 
 ## Logs
 
@@ -448,7 +453,7 @@ jq 'select(.sid == 1000)' /var/log/linmon/events.json
 **Security Monitoring (MITRE ATT&CK):**
 - `security_cred_read` - T1003.008, T1552.004 Credential File Access (shadow, sudoers, ssh keys, pam)
 - `security_cred_write` - T1098.001, T1098.004 Account Manipulation (shadow, sudoers, ssh backdoors)
-- `security_log_tamper` - T1070.001 Log Clearing / Anti-Forensics (truncate, delete /var/log/*)
+- `security_log_tamper` - T1070.001 Log Clearing / Anti-Forensics (truncate, delete, or rename `/var/log/*`)
 - `security_persistence` - T1053, T1547 Persistence (cron, systemd, shell profiles, init scripts)
 - `security_suid` - T1548.001 SUID/SGID Manipulation (chmod +s)
 - `security_ldpreload` - T1574.006 LD_PRELOAD Hijacking
@@ -555,10 +560,10 @@ LinMon logs daemon lifecycle events to both JSON log and syslog/journald. This p
 sudo journalctl -t linmond --since "1 hour ago"
 
 # Example output:
-# linmond[1234]: daemon_start: version=1.2.2 daemon_sha256=abc123... config_sha256=def456... - LinMon monitoring started
-# linmond[1234]: checkpoint: version=1.2.2 seq=12345 events=12345 uptime=1800 daemon_sha256=abc123... config_sha256=def456...
-# linmond[1234]: daemon_reload: signal=1 sender_pid=5678 sender_uid=0 version=1.2.2 daemon_sha256=abc123... config_sha256=789abc... - Configuration reload requested
-# linmond[1234]: daemon_shutdown: signal=15 sender_pid=9012 sender_uid=0 version=1.2.2 daemon_sha256=abc123... config_sha256=def456... - LinMon terminated by signal
+# linmond[1234]: daemon_start: version=1.10.0 daemon_sha256=abc123... config_sha256=def456... - LinMon monitoring started
+# linmond[1234]: checkpoint: version=1.10.0 seq=12345 events=12345 uptime=1800 daemon_sha256=abc123... config_sha256=def456...
+# linmond[1234]: daemon_reload: signal=1 sender_pid=5678 sender_uid=0 version=1.10.0 daemon_sha256=abc123... config_sha256=789abc... - Configuration reload requested
+# linmond[1234]: daemon_shutdown: signal=15 sender_pid=9012 sender_uid=0 version=1.10.0 daemon_sha256=abc123... config_sha256=def456... - LinMon terminated by signal
 
 # Check who stopped LinMon (signal sender info)
 sudo journalctl -t linmond | grep daemon_shutdown

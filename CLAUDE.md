@@ -72,8 +72,9 @@ LinMon adds a `process_name` field to events containing the basename of the exec
   - SELinux/AppArmor blocks `/proc` access
 
 **Implementation** (`src/logger.c:get_process_name_from_proc()`):
-- Uses `readlink()` on `/proc/<pid>/exe` symlink to get actual executable path
-- Requires CAP_SYS_PTRACE to read `/proc/<pid>/exe` for other users (retained after privilege drop)
+- Uses the process-name cache populated by exec events first
+- Optionally falls back to `readlink()` on `/proc/<pid>/exe` when
+  `retain_sys_ptrace=true`; supplied configurations disable this capability
 - Gets actual executable path (not argv[0] which can be manipulated)
 - Extracts basename using `strrchr()`
 - Detects deleted executables (symlink marked with " (deleted)" suffix)
@@ -204,27 +205,12 @@ When running `sudo make install` on an **existing installation**, the Makefile p
 
 **First installation** (no `/etc/linmon/linmon.conf`):
 - Installs `linmon.conf` as default configuration
-- Installs `linmon.conf.example` as reference
 
 **Upgrade** (existing `/etc/linmon/linmon.conf`):
 - **Never overwrites** existing `linmon.conf` (user changes preserved)
-- **Always installs** updated `linmon.conf.example` for reference
-- **Checks for new options** in current version and displays:
-  ```
-  ⚠️  NEW in v1.4.1 - Critical security options missing from your config:
-    ✗ monitor_cred_write  (T1098.001 - Account manipulation detection)
-    ✗ monitor_log_tamper  (T1070.001 - Log tampering detection)
-
-  These features are ENABLED BY DEFAULT but not in your config.
-  Add to /etc/linmon/linmon.conf:
-
-  monitor_cred_write = true
-  monitor_log_tamper = true
-
-  Then reload: systemctl reload linmond
-  ```
-- Shows total number of missing options (to help with config hygiene)
-- Provides diff command for detailed comparison
+- Validates the preserved configuration with the new binary before stopping
+  the active daemon
+- Aborts the upgrade without downtime if validation fails
 
 **Rationale**: This approach follows Linux package manager best practices (similar to dpkg/rpm):
 - User configuration is sacrosanct (never overwritten)
@@ -420,15 +406,15 @@ LinMon implements defense-in-depth security. See `SECURITY.md` for full details.
 
 1. **Load BPF programs** (requires `CAP_BPF`, `CAP_PERFMON`, `CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`)
 2. **Open log file** (requires write access to `/var/log/linmon/`)
-3. **Prepare capabilities** - Set CAP_SYS_PTRACE as ambient capability (requires root)
+3. **Optionally prepare capabilities** - only when `retain_sys_ptrace=true`
    - Sets CAP_SYS_PTRACE in PERMITTED, EFFECTIVE, and INHERITABLE sets
    - Raises ambient capability: `prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SYS_PTRACE)`
    - Sets securebits: `SECBIT_KEEP_CAPS` + `SECBIT_NO_SETUID_FIXUP` (both locked)
    - Prevents capability clearing on setuid()
 4. **Drop UID/GID** to the dedicated `linmon:linmon` account - requires `CAP_SETUID`/`CAP_SETGID`
-5. **Drop dangerous capabilities** - Remove CAP_SETUID and CAP_SETGID from PERMITTED and EFFECTIVE
+5. **Clear runtime capabilities** - remove all capabilities by default
    - Prevents regaining root privileges
-   - Retains only CAP_SYS_PTRACE (for reading `/proc/<pid>/exe` across users)
+   - Compatibility mode retains only CAP_SYS_PTRACE for legacy `/proc` enrichment
 6. **Verify cannot regain root** - `setuid(0)` must fail
 
 After privilege drop, daemon **cannot**:
@@ -437,7 +423,7 @@ After privilege drop, daemon **cannot**:
 - Access files outside `/var/log/linmon/` and `/proc`
 - Regain root privileges (CAP_SETUID/CAP_SETGID explicitly dropped)
 
-**Retained capability**: CAP_SYS_PTRACE (security trade-off)
+**Optional retained capability**: CAP_SYS_PTRACE (security trade-off)
 - Purpose: Read `/proc/<pid>/exe` for all users (required for masquerading detection - T1036.004)
 - Implementation: Ambient capabilities (kernel >= 4.3)
 - Usage: Daemon only uses for read-only `/proc` access (readlink, stat, open)
@@ -447,7 +433,8 @@ After privilege drop, daemon **cannot**:
 ### Configuration Security
 
 - **Log path validation**: Must be absolute, no `..` (path traversal prevention)
-- **Config file permissions**: Aborts if world-writable, warns if not owned by root
+- **Config file permissions**: Aborts unless root-owned and not group/world-writable
+- **Config parsing**: Rejects malformed lines, unknown keys, and invalid values
 - **Integer overflow protection**: `strtoul()` with bounds checking for UID parsing
 - **SIGHUP config reload**: Reloads config safely without restarting daemon
 

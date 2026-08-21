@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-08-21
+
+### Security
+
+- Made configuration parsing fail closed for malformed lines, unknown keys,
+  invalid booleans, and missing configuration files.
+- Added strict BPF attachment mode, event-loss telemetry, and broader syscall
+  coverage for `openat2`, unlink, chmod, truncate, and rename variants.
+- Disabled runtime `CAP_SYS_PTRACE` in supplied configurations, added an
+  exec-event process-name cache, and tightened the systemd syscall policy.
+- Added `--check-config` and pre-deployment validation to the installer.
+
 ## [1.9.2] - 2026-08-12
 
 ### Fixed

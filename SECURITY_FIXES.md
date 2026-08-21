@@ -104,14 +104,15 @@ Added comprehensive test coverage:
 make test
 ```
 
-All 283 unit tests pass with the security restrictions.
+The complete unit-test suite passes with the security restrictions.
 
 ## Defense in Depth
 
 These fixes complement existing security measures:
 - Privilege dropping to the dedicated linmon:linmon user/group after BPF load
 - Restrictive directory permissions (0750 on /var/log/linmon/)
-- Capability restrictions (only CAP_SYS_PTRACE retained)
+- Capability restrictions (none retained by supplied configurations;
+  optional CAP_SYS_PTRACE-only legacy mode)
 - Immutable flags on binary and config (chattr +i)
 
 ## References

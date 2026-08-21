@@ -33,8 +33,9 @@ SystemCallFilter=mmap munmap mremap mprotect
 SystemCallFilter=prctl prlimit64 getrandom uname
 SystemCallFilter=rt_sigaction rt_sigreturn set_tid_address set_robust_list
 SystemCallFilter=rseq arch_prctl
-# CAP_SYS_PTRACE is retained for procfs metadata only. Block active process
-# manipulation primitives even if the daemon is compromised.
+# CAP_SYS_PTRACE is present in the startup bounding set for optional legacy
+# enrichment. Supplied configs do not retain it. Block process manipulation
+# primitives even if an administrator explicitly enables the fallback.
 SystemCallFilter=~ptrace process_vm_writev process_vm_readv kcmp
 
 # NOTE: These hardening options are disabled because they conflict with eBPF:

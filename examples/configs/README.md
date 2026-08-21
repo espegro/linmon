@@ -162,9 +162,15 @@ This directory contains example configurations optimized for different use cases
 2. Copy to `/etc/linmon/linmon.conf`:
    ```bash
    sudo cp examples/configs/server.conf /etc/linmon/linmon.conf
+   sudo chown root:linmon /etc/linmon/linmon.conf
+   sudo chmod 0640 /etc/linmon/linmon.conf
    ```
 3. Adjust any host-specific values (paths, UIDs, network ranges)
-4. Reload LinMon:
+4. Validate before applying it:
+   ```bash
+   sudo linmond --check-config -c /etc/linmon/linmon.conf
+   ```
+5. Reload LinMon:
    ```bash
    sudo systemctl reload linmond
    ```
@@ -206,6 +212,8 @@ only_processes = ssh,sudo,bash
 monitor_ptrace = false     # Disable if using debuggers (gdb, strace)
 monitor_bind = false       # Disable if applications bind ports legitimately
 monitor_persistence = true # Enable for high-security environments
+allow_degraded_monitoring = false # Abort if required BPF hooks fail
+retain_sys_ptrace = false          # Clear all post-startup capabilities
 ```
 
 ## Testing Your Configuration

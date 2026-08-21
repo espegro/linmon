@@ -25,25 +25,33 @@ setuid(pw->pw_uid);           // Drop to linmon user
 - Dedicated `linmon` user provides isolation from other system services instead of using the shared `nobody` account
 - Prevents shared UID attacks where compromised containers/services could interfere with daemon
 
-### 2. Capability Retention (After UID/GID Drop)
-LinMon retains **only CAP_SYS_PTRACE** after privilege drop for masquerading detection:
+### 2. Capability Clearing (After UID/GID Drop)
+The supplied configuration sets `retain_sys_ptrace = false`, so LinMon clears
+**all capabilities** after privilege drop. Process names are normally resolved
+from the exec-event cache.
+
+For compatibility, administrators may enable `retain_sys_ptrace` to enrich
+processes that predate daemon startup. In that mode only `CAP_SYS_PTRACE` is
+retained by the daemon:
 
 ```c
-// Before UID drop:
-prepare_capabilities();  // Set CAP_SYS_PTRACE as ambient capability
+// Before UID drop, only when retain_sys_ptrace=true:
+prepare_capabilities();
 
 // After UID/GID drop to linmon:
 // Drop CAP_SETUID and CAP_SETGID to prevent regaining root
 cap_set_flag(caps, CAP_PERMITTED, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
 cap_set_flag(caps, CAP_EFFECTIVE, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
 
-// Result: linmon user with only CAP_SYS_PTRACE (read /proc/<pid>/exe)
+// Result in compatibility mode: linmon user with only CAP_SYS_PTRACE
 ```
 
-**Purpose**: CAP_SYS_PTRACE allows reading `/proc/<pid>/exe` for all users, enabling process masquerading detection.
+**Compatibility purpose**: CAP_SYS_PTRACE allows reading `/proc/<pid>/exe` for
+processes absent from the exec-event cache.
 
 **Security measures**:
-- Ambient capabilities (kernel >= 4.3) preserve CAP_SYS_PTRACE across UID change
+- Capability retention is opt-in and disabled in supplied configurations
+- Ambient capabilities (kernel >= 4.3) preserve CAP_SYS_PTRACE only across the UID change
 - SECBIT_NO_SETUID_FIXUP + SECBIT_KEEP_CAPS prevent capability clearing on setuid()
 - Both securebits locked with _LOCKED variants
 - CAP_SETUID and CAP_SETGID explicitly dropped after UID transition
@@ -111,9 +119,8 @@ LinMon validates config file permissions on startup:
 **Critical Checks** (abort if failed):
 - ❌ World-writable → **ABORT**
 
-**Warnings** (continue with warning):
-- ⚠️ Not owned by root
-- ⚠️ Group-writable
+- ❌ Not owned by root → **ABORT**
+- ❌ Group-writable → **ABORT**
 
 **Recommended permissions**:
 ```bash

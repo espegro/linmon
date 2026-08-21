@@ -208,7 +208,8 @@ sudo ./install.sh
 4. **Security verification**:
    - Checks config file permissions (must be `0640`)
    - Checks config owner/group (must be `root:linmon`)
-   - Warns about world-writable config
+   - Rejects configurations that are not root-owned or are group/world-writable
+   - Validates the complete configuration before stopping an active daemon
 
 5. **Optional post-install**:
    - Prompts to enable systemd service
