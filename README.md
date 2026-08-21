@@ -170,6 +170,21 @@ See **[INSTALL.md](INSTALL.md)** for complete dependency lists for Ubuntu and RH
 
 ## Configuration
 
+Validate configuration without loading any eBPF programs:
+
+```bash
+sudo linmond --check-config -c /etc/linmon/linmon.conf
+```
+
+Parsing is fail-closed: malformed lines, unknown keys, and invalid values
+reject the configuration. The supplied production configuration also sets
+`allow_degraded_monitoring = false`, so requested monitoring cannot silently
+start with missing BPF attachments.
+
+The supplied configuration also sets `retain_sys_ptrace = false`. Process
+names are cached from exec events; the legacy capability can be enabled for
+best-effort enrichment of processes that predate daemon startup.
+
 ### Quick Start with Example Configurations
 
 LinMon provides pre-configured examples for common use cases. Choose the one that matches your environment:

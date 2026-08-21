@@ -38,6 +38,33 @@ struct {
     __uint(max_entries, 1024 * 1024); // 1MB ring buffer (increased from 256KB)
 } events SEC(".maps");
 
+// Monotonic loss counters read by userspace. Keeping these separate from the
+// event ring buffer ensures a full ring cannot hide the fact that data was lost.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, TELEMETRY_COUNTER_COUNT);
+    __type(key, __u32);
+    __type(value, __u64);
+} telemetry_counters SEC(".maps");
+
+static __always_inline void count_telemetry_loss(__u32 key)
+{
+    __u64 *counter = bpf_map_lookup_elem(&telemetry_counters, &key);
+    if (counter)
+        __sync_fetch_and_add(counter, 1);
+}
+
+static __always_inline void *reserve_event(__u64 size)
+{
+    void *event = bpf_ringbuf_reserve(&events, size, 0);
+    if (!event)
+        count_telemetry_loss(TELEMETRY_RINGBUF_DROPPED);
+    return event;
+}
+
+// All event reservations below use the single events ring buffer.
+#define bpf_ringbuf_reserve(map, size, flags) reserve_event(size)
+
 // Rate limiting state per UID
 struct rate_limit_state {
     __u64 last_refill;  // Last time tokens were refilled
@@ -112,6 +139,7 @@ static __always_inline bool should_rate_limit(__u32 uid)
 
     // Check if we have tokens available
     if (state->tokens == 0) {
+        count_telemetry_loss(TELEMETRY_RATE_LIMITED);
         return true;  // Rate limited - no tokens available
     }
 
@@ -148,8 +176,10 @@ static __always_inline bool should_rate_limit_security(__u32 uid)
             state->tokens = SECURITY_RATE_LIMIT_MAX_TOKENS;
         state->last_refill = now;
     }
-    if (state->tokens == 0)
+    if (state->tokens == 0) {
+        count_telemetry_loss(TELEMETRY_SECURITY_RATE_LIMITED);
         return true;
+    }
 
     state->tokens--;
     bpf_map_update_elem(&security_rate_limit_map, &uid, state, BPF_ANY);
@@ -704,6 +734,30 @@ int handle_openat_kp(struct pt_regs *ctx)
     return handle_openat_common(filename, flags);
 }
 
+SEC("tp/syscalls/sys_enter_openat2")
+int handle_openat2_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    const char *filename = (const char *)ctx->args[1];
+    const struct open_how *how_ptr = (const struct open_how *)ctx->args[2];
+    struct open_how how = {};
+
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_openat_common(filename, (int)how.flags);
+}
+
+SYSCALL_KPROBE(openat2)
+int handle_openat2_kp(struct pt_regs *ctx)
+{
+    const char *filename = (const char *)SYSCALL_ARG2(ctx);
+    const struct open_how *how_ptr = (const struct open_how *)SYSCALL_ARG3(ctx);
+    struct open_how how = {};
+
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_openat_common(filename, (int)how.flags);
+}
+
 // Helper function for unlinkat monitoring (shared between tracepoint and kprobe)
 static __always_inline int handle_unlinkat_common(const char *filename)
 {
@@ -795,6 +849,18 @@ int handle_unlinkat_kp(struct pt_regs *ctx)
 {
     const char *filename = (const char *)SYSCALL_ARG2(ctx);
     return handle_unlinkat_common(filename);
+}
+
+SEC("tp/syscalls/sys_enter_unlink")
+int handle_unlink_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    return handle_unlinkat_common((const char *)ctx->args[0]);
+}
+
+SYSCALL_KPROBE(unlink)
+int handle_unlink_kp(struct pt_regs *ctx)
+{
+    return handle_unlinkat_common((const char *)SYSCALL_ARG1(ctx));
 }
 
 // ============================================================================
@@ -2451,6 +2517,86 @@ int handle_security_openat_kp(struct pt_regs *ctx)
     return handle_security_openat(dfd, pathname, flags);
 }
 
+SEC("tp/syscalls/sys_enter_openat2")
+int handle_security_openat2_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    int dfd = (int)ctx->args[0];
+    const char *pathname = (const char *)ctx->args[1];
+    const struct open_how *how_ptr = (const struct open_how *)ctx->args[2];
+    struct open_how how = {};
+
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_security_openat(dfd, pathname, (int)how.flags);
+}
+
+SYSCALL_KPROBE(openat2)
+int handle_security_openat2_kp(struct pt_regs *ctx)
+{
+    int dfd = (int)SYSCALL_ARG1(ctx);
+    const char *pathname = (const char *)SYSCALL_ARG2(ctx);
+    const struct open_how *how_ptr = (const struct open_how *)SYSCALL_ARG3(ctx);
+    struct open_how how = {};
+
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_security_openat(dfd, pathname, (int)how.flags);
+}
+
+static __always_inline int handle_log_path_operation(const char *pathname,
+                                                     __u32 operation)
+{
+    char path[64];
+    char comm[TASK_COMM_LEN];
+    __u32 uid;
+
+    if (!pathname ||
+        bpf_probe_read_user_str(path, sizeof(path), pathname) < 0 ||
+        !is_log_file(path))
+        return 0;
+
+    bpf_get_current_comm(&comm, sizeof(comm));
+    if (is_legit_log_manager(comm))
+        return 0;
+
+    uid = bpf_get_current_uid_gid();
+    if (should_rate_limit_security(uid))
+        return 0;
+
+    struct security_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+        return 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+
+    event->type = EVENT_SECURITY_LOG_TAMPER;
+    event->timestamp = bpf_ktime_get_ns();
+    event->pid = bpf_get_current_pid_tgid() >> 32;
+    event->uid = uid;
+    FILL_PROCESS_CONTEXT(event, task);
+    FILL_NAMESPACE_INFO(event, task);
+    event->target_pid = 0;
+    event->flags = 0;
+    event->port = 0;
+    event->family = 0;
+    event->extra = operation; // 3=rename, 4=truncate syscall
+    __builtin_memcpy(event->comm, comm, sizeof(event->comm));
+    bpf_probe_read_user_str(&event->filename, sizeof(event->filename), pathname);
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_truncate")
+int handle_truncate_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    return handle_log_path_operation((const char *)ctx->args[0], 4);
+}
+
+SYSCALL_KPROBE(truncate)
+int handle_truncate_kp(struct pt_regs *ctx)
+{
+    return handle_log_path_operation((const char *)SYSCALL_ARG1(ctx), 4);
+}
+
 // SUID/SGID manipulation detection (T1548.001)
 // Detects chmod operations that set SUID (04000) or SGID (02000) bits
 static __always_inline int handle_fchmodat_common(int dfd, const char *pathname, __u32 mode)
@@ -2521,6 +2667,20 @@ int handle_fchmodat_kp(struct pt_regs *ctx)
     __u32 mode = (__u32)SYSCALL_ARG3(ctx);
 
     return handle_fchmodat_common(dfd, pathname, mode);
+}
+
+SEC("tp/syscalls/sys_enter_chmod")
+int handle_chmod_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    return handle_fchmodat_common(-100, (const char *)ctx->args[0],
+                                 (__u32)ctx->args[1]);
+}
+
+SYSCALL_KPROBE(chmod)
+int handle_chmod_kp(struct pt_regs *ctx)
+{
+    return handle_fchmodat_common(-100, (const char *)SYSCALL_ARG1(ctx),
+                                 (__u32)SYSCALL_ARG2(ctx));
 }
 // Persistence mechanism detection (T1053, T1547)
 // Check if path is a persistence location
@@ -2700,6 +2860,90 @@ int handle_persistence_openat_kp(struct pt_regs *ctx)
     return handle_persistence_openat(dfd, pathname, flags);
 }
 
+SEC("tp/syscalls/sys_enter_openat2")
+int handle_persistence_openat2_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    const struct open_how *how_ptr = (const struct open_how *)ctx->args[2];
+    struct open_how how = {};
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_persistence_openat((int)ctx->args[0],
+                                     (const char *)ctx->args[1],
+                                     (int)how.flags);
+}
+
+SYSCALL_KPROBE(openat2)
+int handle_persistence_openat2_kp(struct pt_regs *ctx)
+{
+    const struct open_how *how_ptr = (const struct open_how *)SYSCALL_ARG3(ctx);
+    struct open_how how = {};
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_persistence_openat((int)SYSCALL_ARG1(ctx),
+                                     (const char *)SYSCALL_ARG2(ctx),
+                                     (int)how.flags);
+}
+
+static __always_inline int handle_rename_common(int olddfd, const char *oldpath,
+                                                int newdfd, const char *newpath)
+{
+    // Preserve the existing event schema by routing the destination through
+    // the same classifiers used for file creation and security-sensitive writes.
+    handle_openat_common(newpath, O_WRONLY | O_CREAT);
+    handle_security_openat(newdfd, newpath, O_WRONLY | O_CREAT);
+    handle_persistence_openat(newdfd, newpath, O_WRONLY | O_CREAT);
+    handle_log_path_operation(oldpath, 3);
+    handle_log_path_operation(newpath, 3);
+    (void)olddfd;
+    return 0;
+}
+
+SEC("tp/syscalls/sys_enter_renameat2")
+int handle_renameat2_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    return handle_rename_common((int)ctx->args[0], (const char *)ctx->args[1],
+                                (int)ctx->args[2], (const char *)ctx->args[3]);
+}
+
+SYSCALL_KPROBE(renameat2)
+int handle_renameat2_kp(struct pt_regs *ctx)
+{
+    return handle_rename_common((int)SYSCALL_ARG1(ctx),
+                                (const char *)SYSCALL_ARG2(ctx),
+                                (int)SYSCALL_ARG3(ctx),
+                                (const char *)SYSCALL_ARG4(ctx));
+}
+
+SEC("tp/syscalls/sys_enter_renameat")
+int handle_renameat_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    return handle_rename_common((int)ctx->args[0], (const char *)ctx->args[1],
+                                (int)ctx->args[2], (const char *)ctx->args[3]);
+}
+
+SYSCALL_KPROBE(renameat)
+int handle_renameat_kp(struct pt_regs *ctx)
+{
+    return handle_rename_common((int)SYSCALL_ARG1(ctx),
+                                (const char *)SYSCALL_ARG2(ctx),
+                                (int)SYSCALL_ARG3(ctx),
+                                (const char *)SYSCALL_ARG4(ctx));
+}
+
+SEC("tp/syscalls/sys_enter_rename")
+int handle_rename_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    return handle_rename_common(-100, (const char *)ctx->args[0],
+                                -100, (const char *)ctx->args[1]);
+}
+
+SYSCALL_KPROBE(rename)
+int handle_rename_kp(struct pt_regs *ctx)
+{
+    return handle_rename_common(-100, (const char *)SYSCALL_ARG1(ctx),
+                                -100, (const char *)SYSCALL_ARG2(ctx));
+}
+
 // ============================================================================
 // RAW DISK ACCESS DETECTION (T1561.001/002 - Disk Wipe)
 // ============================================================================
@@ -2874,4 +3118,28 @@ int handle_raw_disk_openat_kp(struct pt_regs *ctx)
     int flags = (int)SYSCALL_ARG3(ctx);
 
     return handle_raw_disk_openat(dfd, pathname, flags);
+}
+
+SEC("tp/syscalls/sys_enter_openat2")
+int handle_raw_disk_openat2_tp(struct trace_event_raw_sys_enter *ctx)
+{
+    const struct open_how *how_ptr = (const struct open_how *)ctx->args[2];
+    struct open_how how = {};
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_raw_disk_openat((int)ctx->args[0],
+                                  (const char *)ctx->args[1],
+                                  (int)how.flags);
+}
+
+SYSCALL_KPROBE(openat2)
+int handle_raw_disk_openat2_kp(struct pt_regs *ctx)
+{
+    const struct open_how *how_ptr = (const struct open_how *)SYSCALL_ARG3(ctx);
+    struct open_how how = {};
+    if (!how_ptr || bpf_probe_read_user(&how, sizeof(how), how_ptr) < 0)
+        return 0;
+    return handle_raw_disk_openat((int)SYSCALL_ARG1(ctx),
+                                  (const char *)SYSCALL_ARG2(ctx),
+                                  (int)how.flags);
 }

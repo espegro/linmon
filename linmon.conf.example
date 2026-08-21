@@ -7,6 +7,11 @@
 # Sysmon for Windows. It logs process execution, file operations, network
 # activity, and privilege escalation events.
 
+# Fail startup if any BPF monitor cannot be attached.
+allow_degraded_monitoring = false
+# Process names are cached from exec events; enable only for legacy /proc fallback.
+retain_sys_ptrace = false
+
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================

@@ -175,6 +175,7 @@ static void print_usage(const char *progname)
     printf("  -c, --config PATH          Configuration file path (default: /etc/linmon/linmon.conf)\n");
     printf("  -h, --help                 Show this help message\n");
     printf("  -v, --version              Show version information\n");
+    printf("      --check-config         Validate configuration and exit\n");
     printf("\nConfiguration overrides (override config file):\n");
     printf("  --resolve-usernames BOOL   Enable/disable username resolution (true/false)\n");
     printf("  --hash-binaries BOOL       Enable/disable binary hashing (true/false)\n");
@@ -218,6 +219,30 @@ static int bump_memlock_rlimit(void)
     };
 
     return setrlimit(RLIMIT_MEMLOCK, &rlim_new);
+}
+
+static void report_telemetry_loss(int map_fd,
+                                  __u64 previous[TELEMETRY_COUNTER_COUNT])
+{
+    static const char *names[TELEMETRY_COUNTER_COUNT] = {
+        "rate_limited",
+        "security_rate_limited",
+        "ringbuf_dropped",
+    };
+
+    for (__u32 key = 0; key < TELEMETRY_COUNTER_COUNT; key++) {
+        __u64 current = 0;
+        if (bpf_map_lookup_elem(map_fd, &key, &current) != 0)
+            continue;
+        if (current > previous[key]) {
+            syslog(LOG_WARNING,
+                   "telemetry_loss: type=%s delta=%llu total=%llu",
+                   names[key],
+                   (unsigned long long)(current - previous[key]),
+                   (unsigned long long)current);
+        }
+        previous[key] = current;
+    }
 }
 
 static int prepare_capabilities(void)
@@ -317,13 +342,6 @@ static int retain_runtime_capabilities(void)
         return -1;
     }
 
-    ret = cap_set_flag(caps, CAP_INHERITABLE, 1, keep_caps, CAP_SET);
-    if (ret) {
-        fprintf(stderr, "Failed to set final inheritable capabilities: %s\n", strerror(errno));
-        cap_free(caps);
-        return -1;
-    }
-
     ret = cap_set_proc(caps);
     if (ret) {
         fprintf(stderr, "Failed to apply final capability set: %s\n", strerror(errno));
@@ -332,6 +350,14 @@ static int retain_runtime_capabilities(void)
     }
 
     cap_free(caps);
+
+    // The daemon needs CAP_SYS_PTRACE itself for /proc/<pid>/exe, but child
+    // executables must never inherit it. It is no longer needed in the ambient
+    // set after the UID transition is complete.
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0) {
+        fprintf(stderr, "Failed to clear ambient capabilities: %s\n", strerror(errno));
+        return -1;
+    }
     return 0;
 }
 
@@ -774,6 +800,7 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
     struct bpf_link *link;
     int attached_count = 0;
     int failed_count = 0;
+    int optional_failed_count = 0;
 
     printf("Attaching BPF programs...\n");
 
@@ -802,10 +829,22 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
     if (!link) failed_count++; else attached_count++;
 
     link = attach_prog_with_fallback(
+        skel->progs.handle_openat2_tp,
+        skel->progs.handle_openat2_kp,
+        "File open/create monitoring (openat2)");
+    if (!link) optional_failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
         skel->progs.handle_unlinkat_tp,
         skel->progs.handle_unlinkat_kp,
         "File delete monitoring");
     if (!link) failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_unlink_tp,
+        skel->progs.handle_unlink_kp,
+        "File delete monitoring (unlink)");
+    if (!link) optional_failed_count++; else attached_count++;
 
     // Network monitoring (kprobes - always available)
     link = bpf_program__attach(skel->progs.tcp_connect_enter);
@@ -948,12 +987,30 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         "Credential/LDPreload monitoring (T1003.008/T1574.006)");
     if (!link) failed_count++; else attached_count++;
 
+    link = attach_prog_with_fallback(
+        skel->progs.handle_security_openat2_tp,
+        skel->progs.handle_security_openat2_kp,
+        "Credential/LDPreload monitoring via openat2");
+    if (!link) optional_failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_truncate_tp,
+        skel->progs.handle_truncate_kp,
+        "Log tamper monitoring via truncate");
+    if (!link) optional_failed_count++; else attached_count++;
+
     // Security monitoring - SUID/SGID manipulation (T1548.001)
     link = attach_prog_with_fallback(
         skel->progs.handle_fchmodat_tp,
         skel->progs.handle_fchmodat_kp,
         "SUID/SGID monitoring (T1548.001)");
     if (!link) failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_chmod_tp,
+        skel->progs.handle_chmod_kp,
+        "SUID/SGID monitoring via chmod");
+    if (!link) optional_failed_count++; else attached_count++;
 
     // Security monitoring - persistence mechanisms (T1053, T1547)
     link = attach_prog_with_fallback(
@@ -962,6 +1019,30 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         "Persistence monitoring (T1053, T1547)");
     if (!link) failed_count++; else attached_count++;
 
+    link = attach_prog_with_fallback(
+        skel->progs.handle_persistence_openat2_tp,
+        skel->progs.handle_persistence_openat2_kp,
+        "Persistence monitoring via openat2");
+    if (!link) optional_failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_rename_tp,
+        skel->progs.handle_rename_kp,
+        "Rename monitoring");
+    if (!link) optional_failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_renameat_tp,
+        skel->progs.handle_renameat_kp,
+        "Rename monitoring (renameat)");
+    if (!link) optional_failed_count++; else attached_count++;
+
+    link = attach_prog_with_fallback(
+        skel->progs.handle_renameat2_tp,
+        skel->progs.handle_renameat2_kp,
+        "Rename monitoring (renameat2)");
+    if (!link) optional_failed_count++; else attached_count++;
+
     // Security monitoring - raw disk access (T1561.001/T1561.002)
     link = attach_prog_with_fallback(
         skel->progs.handle_raw_disk_openat_tp,
@@ -969,11 +1050,28 @@ static int attach_bpf_programs(struct linmon_bpf *skel)
         "Raw disk access monitoring (T1561)");
     if (!link) failed_count++; else attached_count++;
 
+    link = attach_prog_with_fallback(
+        skel->progs.handle_raw_disk_openat2_tp,
+        skel->progs.handle_raw_disk_openat2_kp,
+        "Raw disk access monitoring via openat2");
+    if (!link) optional_failed_count++; else attached_count++;
+
     printf("\nAttachment summary: %d programs attached", attached_count);
     if (failed_count > 0) {
         printf(" (%d failed - some features may be unavailable)\n", failed_count);
+        if (!global_config.allow_degraded_monitoring) {
+            fprintf(stderr, "CRITICAL: BPF monitor attachment failed and degraded monitoring is disabled.\n");
+            return -1;
+        }
     } else {
         printf(" (all features available)\n");
+    }
+    if (optional_failed_count > 0) {
+        printf("  ! %d compatibility extension(s) unavailable on this kernel\n",
+               optional_failed_count);
+        syslog(LOG_WARNING,
+               "bpf_attach: %d optional syscall compatibility extensions unavailable",
+               optional_failed_count);
     }
 
     // We require at least process and network monitoring to work
@@ -991,11 +1089,13 @@ int main(int argc, char **argv)
     struct ring_buffer *rb = NULL;
     int err;
     int opt;
+    bool check_config_only = false;
 
     static struct option long_options[] = {
         {"config",  required_argument, 0, 'c'},
         {"help",    no_argument,       0, 'h'},
         {"version", no_argument,       0, 'v'},
+        {"check-config", no_argument,  0, 1000},
         {0, 0, 0, 0}
     };
 
@@ -1012,10 +1112,26 @@ int main(int argc, char **argv)
             printf("LinMon version %s\n", LINMON_VERSION);
             printf("eBPF-based system monitoring for Linux\n");
             return 0;
+        case 1000:
+            check_config_only = true;
+            break;
         default:
             print_usage(argv[0]);
             return 1;
         }
+    }
+
+    if (check_config_only) {
+        struct linmon_config checked_config = {0};
+        err = load_config(&checked_config, config_path);
+        if (err) {
+            fprintf(stderr, "Configuration validation failed: %s\n", strerror(-err));
+            free_config(&checked_config);
+            return 1;
+        }
+        free_config(&checked_config);
+        printf("Configuration is valid: %s\n", config_path);
+        return 0;
     }
 
     // Set up signal handlers with sigaction (captures sender info for tamper detection)
@@ -1046,7 +1162,7 @@ int main(int argc, char **argv)
 
     // Load configuration
     err = load_config(&global_config, config_path);
-    if (err && err != -ENOENT) {
+    if (err) {
         fprintf(stderr, "Failed to load configuration: %s\n", strerror(-err));
         return 1;
     }
@@ -1428,7 +1544,7 @@ int main(int argc, char **argv)
     //
     // This MUST be done as root (requires CAP_SETPCAP and ability to set securebits)
     // Sets CAP_SYS_PTRACE as ambient so it survives the UID change to nobody
-    if (getuid() == 0) {
+    if (getuid() == 0 && global_config.retain_sys_ptrace) {
         err = prepare_capabilities();
         if (err) {
             fprintf(stderr, "CRITICAL: Failed to prepare capabilities - aborting for security\n");
@@ -1533,9 +1649,20 @@ int main(int argc, char **argv)
         // The service unit may grant root a broader bounding set so startup can
         // load BPF programs and open linmon-owned log/cache paths. After UID/GID
         // drop, discard everything except CAP_SYS_PTRACE.
-        if (retain_runtime_capabilities() != 0) {
-            fprintf(stderr, "CRITICAL: Failed to restrict runtime capabilities\n");
-            goto cleanup;
+        if (global_config.retain_sys_ptrace) {
+            if (retain_runtime_capabilities() != 0) {
+                fprintf(stderr, "CRITICAL: Failed to restrict runtime capabilities\n");
+                goto cleanup;
+            }
+        } else {
+            cap_t empty_caps = cap_init();
+            if (!empty_caps || cap_set_proc(empty_caps) != 0) {
+                if (empty_caps)
+                    cap_free(empty_caps);
+                fprintf(stderr, "CRITICAL: Failed to clear runtime capabilities\n");
+                goto cleanup;
+            }
+            cap_free(empty_caps);
         }
 
         // STEP 10: Verify cannot regain root - PARANOID SECURITY CHECK
@@ -1559,7 +1686,8 @@ int main(int argc, char **argv)
         // SUCCESS: Privilege drop complete
         printf("✓ Dropped to UID/GID %d/%d (linmon), cleared supplementary groups\n",
                (int)linmon_user->pw_uid, (int)linmon_user->pw_gid);
-        printf("✓ Retained CAP_SYS_PTRACE for masquerading detection\n");
+        printf("✓ CAP_SYS_PTRACE: %s\n",
+               global_config.retain_sys_ptrace ? "retained for legacy /proc fallback" : "not retained");
         printf("✓ Verified cannot regain root privileges\n");
     }
 
@@ -1594,6 +1722,9 @@ int main(int argc, char **argv)
     // Periodic checkpoint tracking (tamper detection)
     time_t last_checkpoint = time(NULL);
     int checkpoint_interval = global_config.checkpoint_interval * 60;  // Convert to seconds
+
+    time_t last_telemetry_report = time(NULL);
+    __u64 telemetry_counters[TELEMETRY_COUNTER_COUNT] = {0};
 
     // Periodic log file deletion check (T1070.001 detection)
     time_t last_logfile_check = time(NULL);
@@ -1630,7 +1761,7 @@ int main(int argc, char **argv)
 
             struct linmon_config new_config = {0};
             err = load_config(&new_config, config_path);
-            if (err && err != -ENOENT) {
+            if (err) {
                 fprintf(stderr, "Failed to reload config: %s\n", strerror(-err));
                 reload_config = false;
                 continue;
@@ -1753,6 +1884,14 @@ int main(int argc, char **argv)
         if (err < 0) {
             fprintf(stderr, "Error polling ring buffer: %d\n", err);
             break;
+        }
+
+        time_t telemetry_now = time(NULL);
+        if (telemetry_now - last_telemetry_report >= 60) {
+            report_telemetry_loss(
+                bpf_map__fd(skel->maps.telemetry_counters),
+                telemetry_counters);
+            last_telemetry_report = telemetry_now;
         }
 
         // Periodic cache save (if configured)

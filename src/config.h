@@ -14,6 +14,8 @@
 struct linmon_config {
     char *log_file;
     bool log_to_syslog;
+    bool allow_degraded_monitoring;
+    bool retain_sys_ptrace;
 
     // Built-in log rotation (can be disabled for external logrotate)
     bool log_rotate;              // Enable built-in rotation (default: true)

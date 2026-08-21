@@ -36,6 +36,56 @@ static unsigned long write_error_count = 0;
 static bool log_write_errors = true;  // Only log first few errors to avoid spam
 static char hostname[256] = {0};  // Cached hostname for multi-host SIEM deployments
 
+#define PROCESS_NAME_CACHE_SIZE 8192
+struct process_name_cache_entry {
+    pid_t pid;
+    char name[MAX_FILENAME_LEN];
+    bool valid;
+};
+static struct process_name_cache_entry process_name_cache[PROCESS_NAME_CACHE_SIZE];
+static pthread_mutex_t process_name_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void process_name_cache_update(pid_t pid, const char *filename)
+{
+    if (pid <= 0 || !filename || !filename[0])
+        return;
+    const char *name = strrchr(filename, '/');
+    name = name ? name + 1 : filename;
+    size_t slot = (unsigned int)pid % PROCESS_NAME_CACHE_SIZE;
+
+    pthread_mutex_lock(&process_name_cache_mutex);
+    process_name_cache[slot].pid = pid;
+    snprintf(process_name_cache[slot].name,
+             sizeof(process_name_cache[slot].name), "%s", name);
+    char *deleted = strstr(process_name_cache[slot].name, " (deleted)");
+    if (deleted)
+        *deleted = '\0';
+    process_name_cache[slot].valid = true;
+    pthread_mutex_unlock(&process_name_cache_mutex);
+}
+
+static void process_name_cache_remove(pid_t pid)
+{
+    size_t slot = (unsigned int)pid % PROCESS_NAME_CACHE_SIZE;
+    pthread_mutex_lock(&process_name_cache_mutex);
+    if (process_name_cache[slot].valid && process_name_cache[slot].pid == pid)
+        process_name_cache[slot].valid = false;
+    pthread_mutex_unlock(&process_name_cache_mutex);
+}
+
+static bool process_name_cache_lookup(pid_t pid, char *out, size_t size)
+{
+    bool found = false;
+    size_t slot = (unsigned int)pid % PROCESS_NAME_CACHE_SIZE;
+    pthread_mutex_lock(&process_name_cache_mutex);
+    if (process_name_cache[slot].valid && process_name_cache[slot].pid == pid) {
+        snprintf(out, size, "%s", process_name_cache[slot].name);
+        found = out[0] != '\0';
+    }
+    pthread_mutex_unlock(&process_name_cache_mutex);
+    return found;
+}
+
 // Tamper detection - sequence numbers
 static uint64_t event_sequence = 0;  // Monotonic counter for all events
 static unsigned long event_count = 0;  // Total events logged
@@ -414,6 +464,9 @@ static bool get_process_name_from_proc(pid_t pid, char *process_name_out, size_t
     if (is_deleted)
         *is_deleted = false;
 
+    if (process_name_cache_lookup(pid, process_name_out, size))
+        return true;
+
     // Read /proc/<pid>/exe symlink
     // readlink() works without CAP_SYS_PTRACE - only needs symlink read permission
     snprintf(proc_path, sizeof(proc_path), "/proc/%d/exe", pid);
@@ -567,6 +620,9 @@ int logger_log_process_event(const struct process_event *event)
 
     if (!log_fp)
         return -EINVAL;
+
+    if (event->type == EVENT_PROCESS_EXEC)
+        process_name_cache_update(event->pid, event->filename);
 
     format_timestamp(timestamp, sizeof(timestamp));
 
@@ -849,6 +905,9 @@ int logger_log_process_event(const struct process_event *event)
     }
 
     pthread_mutex_unlock(&log_mutex);
+
+    if (event->type == EVENT_PROCESS_EXIT)
+        process_name_cache_remove(event->pid);
 
     if (!check_fprintf_result(ret))
         return -EIO;
@@ -1488,7 +1547,14 @@ int logger_log_security_event(const struct security_event *event)
     } else if (event->type == EVENT_SECURITY_LOG_TAMPER) {
         // Log file tampering (anti-forensics)
         // extra: 1=truncate (O_TRUNC), 2=delete (unlink)
-        const char *tamper_type = (event->extra == 1) ? "truncate" : "delete";
+        const char *tamper_type;
+        switch (event->extra) {
+        case 1: tamper_type = "truncate"; break;
+        case 2: tamper_type = "delete"; break;
+        case 3: tamper_type = "rename"; break;
+        case 4: tamper_type = "truncate"; break;
+        default: tamper_type = "unknown"; break;
+        }
         fprintf(log_fp, ",\"tamper_type\":\"%s\"", tamper_type);
         if (event->filename[0]) {
             json_escape(event->filename, filename_escaped, sizeof(filename_escaped));

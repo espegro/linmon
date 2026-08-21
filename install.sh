@@ -15,6 +15,16 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Upgrade preflight must run before stopping an active daemon or changing
+# immutable flags. A stale configuration therefore cannot cause downtime.
+if [ -f /etc/linmon/linmon.conf ] && [ -f build/linmond ]; then
+    if ! build/linmond --check-config -c /etc/linmon/linmon.conf; then
+        echo -e "${RED}Error: Existing configuration is not valid for this version.${NC}"
+        echo -e "The running installation was left untouched."
+        exit 1
+    fi
+fi
+
 # Detect nobody group (Debian/Ubuntu use 'nogroup', RHEL/Rocky use 'nobody')
 if getent group nogroup >/dev/null 2>&1; then
     NOBODY_GROUP="nogroup"
@@ -92,6 +102,19 @@ fi
 chown root:linmon /etc/linmon/linmon.conf
 chmod 0640 /etc/linmon/linmon.conf
 
+if [ ! -f build/linmond ]; then
+    echo -e "${RED}Error: build/linmond not found. Run 'make' first.${NC}"
+    exit 1
+fi
+
+# Validate before restoring the immutable flag, so an invalid preserved config
+# remains straightforward to fix after the installer exits.
+if ! build/linmond --check-config -c /etc/linmon/linmon.conf; then
+    echo -e "${RED}Error: Existing configuration is not valid for this version.${NC}"
+    echo -e "Fix the reported issue, then run 'make install' again."
+    exit 1
+fi
+
 # Set immutable flag on config (requires root, prevents modification even by root)
 chattr +i /etc/linmon/linmon.conf 2>/dev/null || echo -e "${YELLOW}⚠${NC} Could not set immutable flag (chattr not available or not supported)"
 
@@ -99,11 +122,6 @@ echo -e "${GREEN}✓${NC} Config permissions: root:linmon, mode: 0640"
 
 # 5. Install binary
 echo -e "${YELLOW}[5/8]${NC} Installing binary..."
-if [ ! -f build/linmond ]; then
-    echo -e "${RED}Error: build/linmond not found. Run 'make' first.${NC}"
-    exit 1
-fi
-
 cp build/linmond /usr/local/sbin/
 chown root:root /usr/local/sbin/linmond
 chmod 0755 /usr/local/sbin/linmond

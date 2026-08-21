@@ -56,6 +56,13 @@ struct bpf_config {
     __u8 ignore_threads;  // Only log main processes (pid == tgid)
 };
 
+enum telemetry_counter {
+    TELEMETRY_RATE_LIMITED = 0,
+    TELEMETRY_SECURITY_RATE_LIMITED = 1,
+    TELEMETRY_RINGBUF_DROPPED = 2,
+    TELEMETRY_COUNTER_COUNT = 3,
+};
+
 // Network CIDR block for filtering
 struct network_cidr {
     __u32 addr;        // Network address (IPv4 only for now)

@@ -57,6 +57,8 @@ static void test_config_defaults(void)
     ASSERT_EQ(config.verbosity, 1);
     ASSERT_EQ(config.log_rotate_count, 10);
     ASSERT_EQ(config.log_rotate_size, 100 * 1024 * 1024);
+    ASSERT_TRUE(config.allow_degraded_monitoring);
+    ASSERT_TRUE(config.retain_sys_ptrace);
 
     free_config(&config);
 }
@@ -180,7 +182,7 @@ static void test_config_path_validation(void)
     create_temp_config(content_relative, path, sizeof(path));
     ret = load_config(&config, path);
     unlink(path);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EINVAL);
     ASSERT_NULL(config.log_file);  // Should not be set
     free_config(&config);
 
@@ -189,7 +191,7 @@ static void test_config_path_validation(void)
     create_temp_config(content_dotdot, path, sizeof(path));
     ret = load_config(&config, path);
     unlink(path);
-    ASSERT_EQ(ret, 0);
+    ASSERT_EQ(ret, -EINVAL);
     ASSERT_NULL(config.log_file);  // Should not be set
     free_config(&config);
 }
@@ -234,8 +236,7 @@ static void test_config_invalid_values(void)
     create_temp_config(content_verbosity, path, sizeof(path));
     int ret = load_config(&config, path);
     unlink(path);
-    ASSERT_EQ(ret, 0);
-    ASSERT_EQ(config.verbosity, 1);  // Should use default
+    ASSERT_EQ(ret, -EINVAL);
     free_config(&config);
 
     // Invalid log_rotate_count (out of range 1-100)
@@ -243,8 +244,7 @@ static void test_config_invalid_values(void)
     create_temp_config(content_count, path, sizeof(path));
     ret = load_config(&config, path);
     unlink(path);
-    ASSERT_EQ(ret, 0);
-    ASSERT_EQ(config.log_rotate_count, 10);  // Should use default
+    ASSERT_EQ(ret, -EINVAL);
     free_config(&config);
 
     // Invalid size (too small, min 1M)
@@ -252,8 +252,7 @@ static void test_config_invalid_values(void)
     create_temp_config(content_size, path, sizeof(path));
     ret = load_config(&config, path);
     unlink(path);
-    ASSERT_EQ(ret, 0);
-    ASSERT_EQ(config.log_rotate_size, 100 * 1024 * 1024);  // Should use default
+    ASSERT_EQ(ret, -EINVAL);
     free_config(&config);
 }
 
@@ -281,10 +280,34 @@ static void test_config_string_lists(void)
     free_config(&config);
 }
 
-// Test malformed lines are skipped
+static void test_config_empty_lists(void)
+{
+    TEST_CASE("Config: empty string lists remain supported");
+
+    struct linmon_config config;
+    char path[256];
+    const char *content =
+        "ignore_processes =\n"
+        "only_processes =\n"
+        "ignore_networks =\n"
+        "ignore_file_paths =\n";
+
+    create_temp_config(content, path, sizeof(path));
+    int ret = load_config(&config, path);
+    unlink(path);
+
+    ASSERT_EQ(ret, 0);
+    ASSERT_NULL(config.ignore_processes);
+    ASSERT_NULL(config.only_processes);
+    ASSERT_NULL(config.ignore_networks);
+    ASSERT_NULL(config.ignore_file_paths);
+    free_config(&config);
+}
+
+// Test malformed lines reject the complete configuration
 static void test_config_malformed_lines(void)
 {
-    TEST_CASE("Config: malformed lines are skipped");
+    TEST_CASE("Config: malformed lines are rejected");
 
     struct linmon_config config;
     char path[256];
@@ -299,10 +322,36 @@ static void test_config_malformed_lines(void)
     int ret = load_config(&config, path);
     unlink(path);
 
-    ASSERT_EQ(ret, 0);
-    ASSERT_TRUE(config.monitor_processes);
-    ASSERT_FALSE(config.monitor_files);
+    ASSERT_EQ(ret, -EINVAL);
 
+    free_config(&config);
+}
+
+static void test_config_invalid_boolean_rejected(void)
+{
+    TEST_CASE("Config: invalid boolean is rejected");
+
+    struct linmon_config config;
+    char path[256];
+    create_temp_config("monitor_log_tamper = ture\n", path, sizeof(path));
+    int ret = load_config(&config, path);
+    unlink(path);
+
+    ASSERT_EQ(ret, -EINVAL);
+    free_config(&config);
+}
+
+static void test_config_unknown_key_rejected(void)
+{
+    TEST_CASE("Config: unknown key is rejected");
+
+    struct linmon_config config;
+    char path[256];
+    create_temp_config("monitor_log_tampering = true\n", path, sizeof(path));
+    int ret = load_config(&config, path);
+    unlink(path);
+
+    ASSERT_EQ(ret, -EINVAL);
     free_config(&config);
 }
 
@@ -497,7 +546,10 @@ int main(void)
     test_config_comments_and_empty_lines();
     test_config_invalid_values();
     test_config_string_lists();
+    test_config_empty_lists();
     test_config_malformed_lines();
+    test_config_invalid_boolean_rejected();
+    test_config_unknown_key_rejected();
     test_config_missing_file();
     test_config_security_monitoring();
     test_config_cache_options();

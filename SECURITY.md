@@ -48,6 +48,8 @@ cap_set_flag(caps, CAP_EFFECTIVE, 2, {CAP_SETUID, CAP_SETGID}, CAP_CLEAR);
 - Both securebits locked with _LOCKED variants
 - CAP_SETUID and CAP_SETGID explicitly dropped after UID transition
 - Verification ensures cannot regain root: `setuid(0)` must fail
+- CAP_SYS_PTRACE is cleared from the ambient and inheritable sets after the
+  UID transition, so child executables do not inherit it
 
 **Critical**: If capability setup fails, LinMon **aborts** (does not continue with incorrect privileges).
 
@@ -74,6 +76,23 @@ ln -s /etc/shadow /var/log/linmon/events.json
 - Prevents DoS attacks from compromised services
 
 ## Configuration Security
+
+Configuration files are validated as a complete unit. Invalid values,
+malformed lines, and unknown keys reject startup or reload; a failed reload
+keeps the previously active configuration. Validate changes before deployment:
+
+```bash
+linmond --check-config -c /etc/linmon/linmon.conf
+```
+
+`allow_degraded_monitoring` defaults to `true` in the compiled compatibility
+defaults for upgraded installations. The supplied production configurations
+set it to `false`, making BPF attachment failures fatal.
+
+`retain_sys_ptrace` follows the same upgrade-safe pattern. The supplied
+configuration disables it and uses the process-name cache populated from exec
+events. Enabling it restores the legacy `/proc/<pid>/exe` fallback for
+processes that were already running when LinMon started.
 
 ### 1. Log File Path Validation
 - **Must** be absolute path (starts with `/`)

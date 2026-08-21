@@ -12,11 +12,38 @@
 #include "config.h"
 #include "utils.h"
 
+static int parse_bool_value(const char *value, bool *result)
+{
+    if (strcmp(value, "true") == 0) {
+        *result = true;
+        return 0;
+    }
+    if (strcmp(value, "false") == 0) {
+        *result = false;
+        return 0;
+    }
+    return -EINVAL;
+}
+
+#define PARSE_BOOL_FIELD(field) do {                                      \
+    bool parsed_value;                                                    \
+    if (parse_bool_value(value, &parsed_value) != 0) {                    \
+        fprintf(stderr, "Invalid boolean for %s on line %u: %s "         \
+                        "(expected true or false)\n",                    \
+                key, line_number, value);                                \
+        parse_error = -EINVAL;                                            \
+        goto out;                                                         \
+    }                                                                     \
+    config->field = parsed_value;                                         \
+} while (0)
+
 // Default configuration
 static void set_defaults(struct linmon_config *config)
 {
     config->log_file = NULL;
     config->log_to_syslog = false;
+    config->allow_degraded_monitoring = true;
+    config->retain_sys_ptrace = true;
 
     // Built-in log rotation defaults
     config->log_rotate = true;                  // On by default
@@ -118,6 +145,8 @@ int load_config(struct linmon_config *config, const char *config_file)
     char line[256];
     char key[64], value[192];
     struct stat st;
+    unsigned int line_number = 0;
+    int parse_error = 0;
 
     set_defaults(config);
 
@@ -175,14 +204,28 @@ int load_config(struct linmon_config *config, const char *config_file)
     // Parse config file line by line
     // Format: "key = value" (whitespace around = is required)
     while (fgets(line, sizeof(line), fp)) {
+        line_number++;
         // Skip comments and empty lines
         if (line[0] == '#' || line[0] == '\n')
             continue;
 
         // Parse key-value pair
         // Limits: key max 63 chars, value max 191 chars (total 256 with "key = value\n")
-        if (sscanf(line, "%63s = %191s", key, value) != 2)
-            continue;  // Malformed line, skip silently
+        int fields = sscanf(line, "%63s = %191s", key, value);
+        if (fields == 1 && strchr(line, '=') != NULL) {
+            const char *after_equals = strchr(line, '=') + 1;
+            while (*after_equals == ' ' || *after_equals == '\t')
+                after_equals++;
+            if (*after_equals == '\n' || *after_equals == '\r' || *after_equals == '\0') {
+                value[0] = '\0';
+                fields = 2;
+            }
+        }
+        if (fields != 2) {
+            fprintf(stderr, "Malformed configuration line %u\n", line_number);
+            parse_error = -EINVAL;
+            goto out;
+        }
 
         if (strcmp(key, "log_file") == 0) {
             // SECURITY: Validate log file path to prevent path traversal attacks
@@ -197,14 +240,16 @@ int load_config(struct linmon_config *config, const char *config_file)
             // Daemon may change working directory, so relative paths are ambiguous
             if (value[0] != '/') {
                 fprintf(stderr, "Security: log_file must be absolute path: %s\n", value);
-                continue;  // Skip invalid path, keep default
+                parse_error = -EINVAL;
+                goto out;
             }
             // Why ".." rejected:
             // Prevents directory traversal even with absolute paths
             // Example: /var/log/linmon/../../tmp/evil.log → /tmp/evil.log
             if (strstr(value, "..") != NULL) {
                 fprintf(stderr, "Security: log_file cannot contain '..': %s\n", value);
-                continue;  // Skip invalid path, keep default
+                parse_error = -EINVAL;
+                goto out;
             }
             config->log_file = strdup(value);
             if (!config->log_file) {
@@ -213,9 +258,13 @@ int load_config(struct linmon_config *config, const char *config_file)
                 return -ENOMEM;
             }
         } else if (strcmp(key, "log_to_syslog") == 0) {
-            config->log_to_syslog = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(log_to_syslog);
+        } else if (strcmp(key, "allow_degraded_monitoring") == 0) {
+            PARSE_BOOL_FIELD(allow_degraded_monitoring);
+        } else if (strcmp(key, "retain_sys_ptrace") == 0) {
+            PARSE_BOOL_FIELD(retain_sys_ptrace);
         } else if (strcmp(key, "log_rotate") == 0) {
-            config->log_rotate = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(log_rotate);
         } else if (strcmp(key, "log_rotate_size") == 0) {
             // Parse size with optional suffix (K, M, G)
             char *endptr;
@@ -228,11 +277,13 @@ int load_config(struct linmon_config *config, const char *config_file)
                 val *= 1024 * 1024 * 1024;
             } else if (*endptr != '\0') {
                 fprintf(stderr, "Invalid log_rotate_size value: %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             if (val < 1024 * 1024) {
                 fprintf(stderr, "log_rotate_size too small (min 1M): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->log_rotate_size = val;
         } else if (strcmp(key, "log_rotate_count") == 0) {
@@ -240,32 +291,40 @@ int load_config(struct linmon_config *config, const char *config_file)
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 1 || val > 100) {
                 fprintf(stderr, "Invalid log_rotate_count (1-100): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->log_rotate_count = (int)val;
         } else if (strcmp(key, "monitor_processes") == 0) {
-            config->monitor_processes = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_processes);
         } else if (strcmp(key, "monitor_process_exit") == 0) {
-            config->monitor_process_exit = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_process_exit);
         } else if (strcmp(key, "monitor_files") == 0) {
-            config->monitor_files = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_files);
         } else if (strcmp(key, "monitor_tcp") == 0) {
-            config->monitor_tcp = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_tcp);
         } else if (strcmp(key, "monitor_udp") == 0) {
-            config->monitor_udp = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_udp);
         } else if (strcmp(key, "monitor_vsock") == 0) {
-            config->monitor_vsock = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_vsock);
         } else if (strcmp(key, "monitor_network") == 0) {
             // Legacy support: monitor_network sets both TCP and UDP
-            bool val = (strcmp(value, "true") == 0);
-            config->monitor_tcp = val;
-            config->monitor_udp = val;
+            bool parsed_value;
+            if (parse_bool_value(value, &parsed_value) != 0) {
+                fprintf(stderr, "Invalid boolean for %s on line %u: %s (expected true or false)\n",
+                        key, line_number, value);
+                parse_error = -EINVAL;
+                goto out;
+            }
+            config->monitor_tcp = parsed_value;
+            config->monitor_udp = parsed_value;
         } else if (strcmp(key, "verbosity") == 0) {
             char *endptr;
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 0 || val > 2) {
                 fprintf(stderr, "Invalid verbosity value: %s (must be 0-2)\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->verbosity = (int)val;
         } else if (strcmp(key, "min_uid") == 0) {
@@ -285,7 +344,8 @@ int load_config(struct linmon_config *config, const char *config_file)
             unsigned long val = strtoul(value, &endptr, 10);
             if (*endptr != '\0' || val > UINT_MAX) {
                 fprintf(stderr, "Invalid min_uid value: %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->min_uid = (unsigned int)val;
         } else if (strcmp(key, "max_uid") == 0) {
@@ -295,34 +355,37 @@ int load_config(struct linmon_config *config, const char *config_file)
             unsigned long val = strtoul(value, &endptr, 10);
             if (*endptr != '\0' || val > UINT_MAX) {
                 fprintf(stderr, "Invalid max_uid value: %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->max_uid = (unsigned int)val;
         } else if (strcmp(key, "require_tty") == 0) {
-            config->require_tty = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(require_tty);
         } else if (strcmp(key, "ignore_threads") == 0) {
-            config->ignore_threads = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(ignore_threads);
         } else if (strcmp(key, "capture_cmdline") == 0) {
-            config->capture_cmdline = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(capture_cmdline);
         } else if (strcmp(key, "redact_sensitive") == 0) {
-            config->redact_sensitive = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(redact_sensitive);
         } else if (strcmp(key, "resolve_usernames") == 0) {
-            config->resolve_usernames = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(resolve_usernames);
         } else if (strcmp(key, "hash_binaries") == 0) {
-            config->hash_binaries = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(hash_binaries);
         } else if (strcmp(key, "verify_packages") == 0) {
-            config->verify_packages = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(verify_packages);
         } else if (strcmp(key, "capture_container_metadata") == 0) {
-            config->capture_container_metadata = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(capture_container_metadata);
         } else if (strcmp(key, "pkg_cache_file") == 0) {
             // Validate cache file path
             if (value[0] != '/') {
                 fprintf(stderr, "Security: pkg_cache_file must be absolute path: %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             if (strstr(value, "..") != NULL) {
                 fprintf(stderr, "Security: pkg_cache_file cannot contain '..': %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->pkg_cache_file = strdup(value);
             if (!config->pkg_cache_file) {
@@ -335,18 +398,21 @@ int load_config(struct linmon_config *config, const char *config_file)
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 100 || val > 1000000) {
                 fprintf(stderr, "Invalid pkg_cache_size (100-1000000): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->pkg_cache_size = (int)val;
         } else if (strcmp(key, "hash_cache_file") == 0) {
             // Validate cache file path
             if (value[0] != '/') {
                 fprintf(stderr, "Security: hash_cache_file must be absolute path: %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             if (strstr(value, "..") != NULL) {
                 fprintf(stderr, "Security: hash_cache_file cannot contain '..': %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->hash_cache_file = strdup(value);
             if (!config->hash_cache_file) {
@@ -359,7 +425,8 @@ int load_config(struct linmon_config *config, const char *config_file)
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 100 || val > 1000000) {
                 fprintf(stderr, "Invalid hash_cache_size (100-1000000): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->hash_cache_size = (int)val;
         } else if (strcmp(key, "cache_save_interval") == 0) {
@@ -367,7 +434,8 @@ int load_config(struct linmon_config *config, const char *config_file)
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 0 || val > 60) {
                 fprintf(stderr, "Invalid cache_save_interval (0-60 minutes): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->cache_save_interval = (int)val;
         } else if (strcmp(key, "checkpoint_interval") == 0) {
@@ -375,17 +443,19 @@ int load_config(struct linmon_config *config, const char *config_file)
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 0 || val > 1440) {  // 0 to 1440 minutes (24 hours)
                 fprintf(stderr, "Invalid checkpoint_interval (0-1440 minutes): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->checkpoint_interval = (int)val;
         } else if (strcmp(key, "monitor_auth_integrity") == 0) {
-            config->monitor_auth_integrity = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_auth_integrity);
         } else if (strcmp(key, "auth_integrity_interval") == 0) {
             char *endptr;
             long val = strtol(value, &endptr, 10);
             if (*endptr != '\0' || val < 0 || val > 1440) {  // 0 to 1440 minutes (24 hours)
                 fprintf(stderr, "Invalid auth_integrity_interval (0-1440 minutes): %s\n", value);
-                continue;
+                parse_error = -EINVAL;
+                goto out;
             }
             config->auth_integrity_interval = (int)val;
         } else if (strcmp(key, "ignore_processes") == 0) {
@@ -426,38 +496,46 @@ int load_config(struct linmon_config *config, const char *config_file)
             }
         // Security monitoring (MITRE ATT&CK detection)
         } else if (strcmp(key, "monitor_ptrace") == 0) {
-            config->monitor_ptrace = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_ptrace);
         } else if (strcmp(key, "monitor_modules") == 0) {
-            config->monitor_modules = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_modules);
         } else if (strcmp(key, "monitor_memfd") == 0) {
-            config->monitor_memfd = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_memfd);
         } else if (strcmp(key, "monitor_bind") == 0) {
-            config->monitor_bind = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_bind);
         } else if (strcmp(key, "monitor_unshare") == 0) {
-            config->monitor_unshare = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_unshare);
         } else if (strcmp(key, "monitor_execveat") == 0) {
-            config->monitor_execveat = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_execveat);
         } else if (strcmp(key, "monitor_bpf") == 0) {
-            config->monitor_bpf = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_bpf);
         } else if (strcmp(key, "monitor_cred_read") == 0) {
-            config->monitor_cred_read = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_cred_read);
         } else if (strcmp(key, "monitor_ldpreload") == 0) {
-            config->monitor_ldpreload = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_ldpreload);
         } else if (strcmp(key, "monitor_persistence") == 0) {
-            config->monitor_persistence = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_persistence);
         } else if (strcmp(key, "monitor_suid") == 0) {
-            config->monitor_suid = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_suid);
         } else if (strcmp(key, "monitor_cred_write") == 0) {
-            config->monitor_cred_write = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_cred_write);
         } else if (strcmp(key, "monitor_log_tamper") == 0) {
-            config->monitor_log_tamper = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_log_tamper);
         } else if (strcmp(key, "monitor_raw_disk_access") == 0) {
-            config->monitor_raw_disk_access = (strcmp(value, "true") == 0);
+            PARSE_BOOL_FIELD(monitor_raw_disk_access);
+        } else {
+            fprintf(stderr, "Unknown configuration key on line %u: %s\n",
+                    line_number, key);
+            parse_error = -EINVAL;
+            goto out;
         }
     }
 
+out:
     fclose(fp);
-    return 0;
+    if (parse_error != 0)
+        free_config(config);
+    return parse_error;
 }
 
 void free_config(struct linmon_config *config)
