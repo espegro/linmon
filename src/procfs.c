@@ -9,8 +9,15 @@
 #include <unistd.h>
 
 #include "procfs.h"
+#include "filter.h"
 
 bool procfs_read_cmdline(pid_t pid, char *buf, size_t max_len)
+{
+    return procfs_read_cmdline_redacted(pid, buf, max_len, false);
+}
+
+bool procfs_read_cmdline_redacted(pid_t pid, char *buf, size_t max_len,
+                                 bool redact)
 {
     char path[64];
     int fd;
@@ -45,6 +52,8 @@ bool procfs_read_cmdline(pid_t pid, char *buf, size_t max_len)
 
     // Null-terminate
     buf[bytes_read] = '\0';
+    if (redact)
+        filter_redact_argv(buf, (size_t)bytes_read + 1);
 
     // Replace null bytes with spaces (cmdline args are null-separated)
     // Guard against underflow: only process if we have at least 2 bytes

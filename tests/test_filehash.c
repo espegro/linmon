@@ -59,6 +59,38 @@ int main(void)
 {
     TEST_SUITE("LinMon File Hash Descriptor Tests");
     test_preopened_descriptor_hashing();
+    char path[] = "/tmp/linmon-hash-regression-XXXXXX";
+    char cache[] = "/tmp/linmon-hash-regression-cache-XXXXXX";
+    int cache_fd = mkstemp(cache);
+    ASSERT_TRUE(cache_fd >= 0);
+    close(cache_fd);
+    ASSERT_EQ(filehash_init(cache, 16), 0);
+    char first[65], cached[65], fresh[65];
+    int fd = mkstemp(path);
+    ASSERT_TRUE(fd >= 0);
+    ASSERT_EQ(write(fd, "AAAA", 4), 4);
+    struct stat st;
+    ASSERT_EQ(fstat(fd, &st), 0);
+    ASSERT_TRUE(filehash_calculate(path, first, sizeof(first)));
+    usleep(2000); // Ensure the filesystem change timestamp advances.
+    ASSERT_EQ(pwrite(fd, "BBBB", 4, 0), 4);
+    struct timespec times[2] = {st.st_atim, st.st_mtim};
+    ASSERT_EQ(futimens(fd, times), 0);
+    ASSERT_TRUE(filehash_calculate(path, cached, sizeof(cached)));
+    ASSERT_TRUE(filehash_calculate_fresh(path, fresh, sizeof(fresh)));
+    ASSERT_STRNEQ(first, cached);
+    ASSERT_STREQ(cached, fresh);
+    filehash_cleanup();
+    ASSERT_EQ(filehash_init(cache, 16), 0);
+    ASSERT_TRUE(filehash_calculate(path, cached, sizeof(cached)));
+    ASSERT_STREQ(cached, fresh);
+    unsigned long hits = 0;
+    filehash_stats(&hits, NULL, NULL, NULL);
+    ASSERT_EQ(hits, 1);
+    filehash_cleanup();
+    close(fd);
+    unlink(path);
+    unlink(cache);
     print_test_summary();
     return tests_failed > 0 ? 1 : 0;
 }

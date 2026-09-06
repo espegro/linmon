@@ -27,6 +27,8 @@ struct hash_entry {
     dev_t dev;
     ino_t ino;
     time_t mtime;
+    long mtime_nsec;
+    struct timespec ctime;
     off_t size;
     char hash[SHA256_HEX_LEN];
     unsigned long access_count;
@@ -196,7 +198,10 @@ static bool compute_sha256_fd(int fd, char *hash_out, struct stat *st_out)
     // Reject a result if the file changed while it was being read.
     if (fstat(fd, &final_st) < 0 ||
         final_st.st_dev != st.st_dev || final_st.st_ino != st.st_ino ||
-        final_st.st_size != st.st_size || final_st.st_mtime != st.st_mtime) {
+        final_st.st_size != st.st_size || final_st.st_mtime != st.st_mtime ||
+        final_st.st_mtim.tv_nsec != st.st_mtim.tv_nsec ||
+        final_st.st_ctim.tv_sec != st.st_ctim.tv_sec ||
+        final_st.st_ctim.tv_nsec != st.st_ctim.tv_nsec) {
         EVP_MD_CTX_free(mdctx);
         return false;
     }
@@ -227,6 +232,13 @@ static bool compute_sha256(const char *path, char *hash_out, struct stat *st_out
     bool ok = compute_sha256_fd(fd, hash_out, st_out);
     close(fd);
     return ok;
+}
+
+bool filehash_calculate_fresh(const char *path, char *hash_out, size_t hash_size)
+{
+    if (!path || !hash_out || hash_size < SHA256_HEX_LEN)
+        return false;
+    return compute_sha256(path, hash_out, NULL);
 }
 
 int filehash_init(const char *cache_file, int max_entries)
@@ -308,8 +320,8 @@ int filehash_save(void)
     umask(old_umask);
 
     // Write header
-    if (fprintf(fp, "# LinMon hash cache v1\n") < 0 ||
-        fprintf(fp, "# path|dev|ino|mtime|size|sha256\n") < 0) {
+    if (fprintf(fp, "# LinMon hash cache v2\n") < 0 ||
+        fprintf(fp, "# path|dev|ino|mtime|mtime_nsec|ctime|ctime_nsec|size|sha256\n") < 0) {
         int saved_errno = errno;
         fclose(fp);
         unlink(tmp_path);
@@ -321,11 +333,14 @@ int filehash_save(void)
     for (int i = 0; i < HASH_BUCKETS; i++) {
         struct hash_entry *entry = hash_table[i];
         while (entry) {
-            if (fprintf(fp, "%s|%lu|%lu|%ld|%ld|%s\n",
+            if (fprintf(fp, "%s|%lu|%lu|%ld|%ld|%ld|%ld|%ld|%s\n",
                     entry->path,
                     (unsigned long)entry->dev,
                     (unsigned long)entry->ino,
                     (long)entry->mtime,
+                    entry->mtime_nsec,
+                    (long)entry->ctime.tv_sec,
+                    entry->ctime.tv_nsec,
                     (long)entry->size,
                     entry->hash) < 0) {
                 int saved_errno = errno;
@@ -357,7 +372,7 @@ int filehash_load(void)
 {
     FILE *fp;
     struct stat st;
-    char line[PATH_MAX_LEN + SHA256_HEX_LEN + 128];
+    char line[PATH_MAX_LEN + SHA256_HEX_LEN + 256];
     int loaded = 0;
 
     fp = safe_fopen_readonly(cache_file_path, &st);
@@ -377,19 +392,22 @@ int filehash_load(void)
     while (fgets(line, sizeof(line), fp)) {
         char path[PATH_MAX_LEN];
         unsigned long dev, ino;
-        long mtime, size;
+        long mtime, mtime_nsec, ctime, ctime_nsec, size;
         char hash[SHA256_HEX_LEN];
 
         // Skip comments and empty lines
         if (line[0] == '#' || line[0] == '\n')
             continue;
 
-        // Parse line: path|dev|ino|mtime|size|sha256
-        if (sscanf(line, "%255[^|]|%lu|%lu|%ld|%ld|%64s",
-                   path, &dev, &ino, &mtime, &size, hash) == 6) {
-            // Add to cache
-            if (cache_add(path, (dev_t)dev, (ino_t)ino,
-                         (time_t)mtime, (off_t)size, hash)) {
+        // Old v1 entries lack sufficient identity metadata; recompute them.
+        if (sscanf(line, "%255[^|]|%lu|%lu|%ld|%ld|%ld|%ld|%ld|%64s",
+                   path, &dev, &ino, &mtime, &mtime_nsec, &ctime,
+                   &ctime_nsec, &size, hash) == 9) {
+            struct hash_entry *entry = cache_add(path, (dev_t)dev, (ino_t)ino,
+                         (time_t)mtime, (off_t)size, hash);
+            if (entry) {
+                entry->mtime_nsec = mtime_nsec;
+                entry->ctime = (struct timespec){ctime, ctime_nsec};
                 loaded++;
             }
         }
@@ -440,6 +458,9 @@ bool filehash_calculate(const char *path, char *hash_out, size_t hash_size)
         if (entry->dev == st.st_dev &&
             entry->ino == st.st_ino &&
             entry->mtime == st.st_mtime &&
+            entry->mtime_nsec == st.st_mtim.tv_nsec &&
+            entry->ctime.tv_sec == st.st_ctim.tv_sec &&
+            entry->ctime.tv_nsec == st.st_ctim.tv_nsec &&
             entry->size == st.st_size) {
             // Cache hit
             stat_hits++;
@@ -475,10 +496,14 @@ bool filehash_calculate(const char *path, char *hash_out, size_t hash_size)
             cache_update(entry, actual_st.st_dev, actual_st.st_ino,
                         actual_st.st_mtime, actual_st.st_size, computed_hash);
         } else {
-            cache_add(path, actual_st.st_dev, actual_st.st_ino,
+            entry = cache_add(path, actual_st.st_dev, actual_st.st_ino,
                      actual_st.st_mtime, actual_st.st_size, computed_hash);
         }
 
+        if (entry) {
+            entry->mtime_nsec = actual_st.st_mtim.tv_nsec;
+            entry->ctime = actual_st.st_ctim;
+        }
         pthread_mutex_unlock(&cache_mutex);
 
         snprintf(hash_out, hash_size, "%s", computed_hash);
@@ -506,9 +531,13 @@ bool filehash_calculate_fd(int fd, const char *cache_key,
                      actual_st.st_mtime, actual_st.st_size, computed_hash);
         stat_recomputes++;
     } else {
-        cache_add(cache_key, actual_st.st_dev, actual_st.st_ino,
+        entry = cache_add(cache_key, actual_st.st_dev, actual_st.st_ino,
                   actual_st.st_mtime, actual_st.st_size, computed_hash);
         stat_misses++;
+    }
+    if (entry) {
+        entry->mtime_nsec = actual_st.st_mtim.tv_nsec;
+        entry->ctime = actual_st.st_ctim;
     }
     pthread_mutex_unlock(&cache_mutex);
 

@@ -12,6 +12,9 @@
 // Returns true on success, false on error
 // Replaces null bytes with spaces, caps at max_len
 bool procfs_read_cmdline(pid_t pid, char *buf, size_t max_len);
+// Apply credential filtering before converting argument separators to spaces.
+bool procfs_read_cmdline_redacted(pid_t pid, char *buf, size_t max_len,
+                                 bool redact);
 
 // Read SUDO_UID and SUDO_USER from /proc/<pid>/environ
 // Returns true if SUDO_UID was found (process running via sudo)

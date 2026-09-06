@@ -32,10 +32,12 @@ int filehash_load(void);
 void filehash_stats(unsigned long *hits, unsigned long *misses,
                     unsigned long *entries, unsigned long *recomputes);
 
-// Calculate SHA256 hash of file (cached based on inode/mtime/size)
+// Calculate SHA256 using device/inode/size and nanosecond mtime/ctime validation.
 // Returns true on success, false on error
 // Thread-safe
 bool filehash_calculate(const char *path, char *hash_out, size_t hash_size);
+// Always read contents for integrity checks rather than trusting cached metadata.
+bool filehash_calculate_fresh(const char *path, char *hash_out, size_t hash_size);
 
 // Recalculate SHA256 from an already-open regular-file descriptor. Uses pread()
 // so the caller's file offset is unchanged, and updates the cache under cache_key.

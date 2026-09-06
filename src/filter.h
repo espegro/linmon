@@ -20,5 +20,7 @@ bool filter_should_log_file(const char *filename);
 
 // Redact sensitive information from command line
 void filter_redact_cmdline(char *cmdline, size_t size);
+// NUL-separated arguments, including a terminator for the final argument.
+void filter_redact_argv(char *args, size_t length);
 
 #endif /* __LINMON_FILTER_H */

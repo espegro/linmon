@@ -93,8 +93,8 @@ $(SRC_DIR)/%.skel.h: $(BPF_OBJ_DIR)/%.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
 # Compile daemon source files
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(BPF_SKELS) VERSION | $(OBJ_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(BPF_SKELS) VERSION Makefile | $(OBJ_DIR)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # Link daemon
 $(BUILD_DIR)/$(DAEMON): $(DAEMON_OBJECTS) | $(BUILD_DIR)
@@ -104,31 +104,38 @@ $(BUILD_DIR)/$(DAEMON): $(DAEMON_OBJECTS) | $(BUILD_DIR)
 
 # Compile test for filter.c
 $(TEST_BIN_DIR)/test_filter: $(TEST_DIR)/test_filter.c $(SRC_DIR)/filter.c $(SRC_DIR)/config.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -o $@
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 $(TEST_BIN_DIR)/test_filehash: $(TEST_DIR)/test_filehash.c $(SRC_DIR)/filehash.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -lcrypto -o $@
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -lcrypto -o $@
 
 # Compile JSON logger escaping tests against the production implementation.
 $(TEST_BIN_DIR)/test_logger: $(TEST_DIR)/test_logger.c $(SRC_DIR)/json.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -o $@
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 $(TEST_BIN_DIR)/test_pkgcache: $(TEST_DIR)/test_pkgcache.c $(SRC_DIR)/pkgcache.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -lcap -o $@
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -lcap -o $@
 
 # Compile test for config.c
 $(TEST_BIN_DIR)/test_config: $(TEST_DIR)/test_config.c $(SRC_DIR)/config.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -o $@
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 # Compile test for procfs.c
-$(TEST_BIN_DIR)/test_procfs: $(TEST_DIR)/test_procfs.c $(SRC_DIR)/procfs.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -o $@
+$(TEST_BIN_DIR)/test_procfs: $(TEST_DIR)/test_procfs.c $(SRC_DIR)/procfs.c $(SRC_DIR)/filter.c | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 # Compile test for utils.c
 $(TEST_BIN_DIR)/test_utils: $(TEST_DIR)/test_utils.c $(SRC_DIR)/utils.c | $(TEST_BIN_DIR)
-	$(CC) $(TEST_CFLAGS) $^ -o $@
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -o $@
 
 # Run all tests
+$(TEST_BIN_DIR)/test_rotation: $(TEST_DIR)/test_rotation.c $(filter-out $(SRC_DIR)/main.c,$(DAEMON_SOURCES)) | $(TEST_BIN_DIR)
+	$(CC) $(TEST_CFLAGS) $(filter %.c,$^) -Wl,--wrap=open $(LDFLAGS) -o $@
+
+$(TEST_BINS): $(wildcard $(SRC_DIR)/*.h) $(BPF_DIR)/common.h $(TEST_DIR)/test_framework.h
+
+-include $(DAEMON_OBJECTS:.o=.d)
+
 test: $(TEST_BINS)
 	@echo ""
 	@echo "Running LinMon Unit Tests..."

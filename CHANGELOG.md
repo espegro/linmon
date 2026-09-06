@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-09-06
+
+### Fixed
+
+- Redact complete credential arguments before flattening command lines, including
+  passwords containing spaces and values beginning with a dash.
+- Validate cached hashes using nanosecond mtime and ctime; always recompute
+  daemon and configuration integrity hashes from file contents.
+- Preserve logging when rotation fails and retry on subsequent events. Rotate
+  only between complete JSON records.
+- Track header dependencies when building the daemon and tests.
+- Add regression coverage for credential redaction, persistent hash validation,
+  production log rotation failures, and write-error recovery.
+
 ## [1.10.0] - 2026-08-21
 
 ### Security

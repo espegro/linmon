@@ -6,6 +6,7 @@
 #define __LINMON_LOGGER_H
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include "../bpf/common.h"

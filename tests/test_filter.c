@@ -19,6 +19,11 @@ static struct linmon_config create_test_config(void)
 // Test redaction of password=value format
 static void test_redact_equals_format(void)
 {
+    char args[] = "tool\0--password\0hello secret world\0--token=-abc def\0-p\0-leading secret\0";
+    filter_redact_argv(args, sizeof(args));
+    ASSERT_STREQ(args + 16, "******************");
+    ASSERT_STREQ(args + 35, "--token=********");
+    ASSERT_STREQ(args + 55, "***************");
     TEST_CASE("Redaction: equals format (password=secret)");
 
     char cmdline1[256];

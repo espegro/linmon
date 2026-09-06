@@ -152,7 +152,7 @@ static void log_checkpoint_to_syslog(void)
 
     // Recalculate config hash (in case it changed on disk without SIGHUP)
     char current_config_sha256[SHA256_HEX_LEN];
-    if (!filehash_calculate(config_path, current_config_sha256, sizeof(current_config_sha256))) {
+    if (!filehash_calculate_fresh(config_path, current_config_sha256, sizeof(current_config_sha256))) {
         strncpy(current_config_sha256, "error", sizeof(current_config_sha256));
         current_config_sha256[sizeof(current_config_sha256) - 1] = '\0';
     }
@@ -402,7 +402,8 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
         // Capture command line if enabled and this is an exec event
         if (global_config.capture_cmdline && e->type == EVENT_PROCESS_EXEC) {
             // Read from /proc/<pid>/cmdline (process may have exited, that's OK)
-            procfs_read_cmdline(e->pid, e->cmdline, sizeof(e->cmdline));
+            procfs_read_cmdline_redacted(e->pid, e->cmdline, sizeof(e->cmdline),
+                                        global_config.redact_sensitive);
         }
 
         // Redact sensitive information if enabled
@@ -1406,7 +1407,7 @@ int main(int argc, char **argv)
     // Calculate daemon binary hash (for tamper detection)
     // Must be done before privilege dropping (need CAP_DAC_READ_SEARCH to read executable)
     if (realpath(argv[0], daemon_binary_path) != NULL) {
-        if (!filehash_calculate(daemon_binary_path, daemon_sha256, sizeof(daemon_sha256))) {
+        if (!filehash_calculate_fresh(daemon_binary_path, daemon_sha256, sizeof(daemon_sha256))) {
             fprintf(stderr, "Warning: Could not hash daemon binary\n");
             strncpy(daemon_sha256, "unknown", sizeof(daemon_sha256));
             daemon_sha256[sizeof(daemon_sha256) - 1] = '\0';
@@ -1419,7 +1420,7 @@ int main(int argc, char **argv)
     }
 
     // Calculate config file hash (for tamper detection)
-    if (!filehash_calculate(config_path, config_sha256, sizeof(config_sha256))) {
+    if (!filehash_calculate_fresh(config_path, config_sha256, sizeof(config_sha256))) {
         fprintf(stderr, "Warning: Could not hash config file\n");
         strncpy(config_sha256, "unknown", sizeof(config_sha256));
         config_sha256[sizeof(config_sha256) - 1] = '\0';
@@ -1748,7 +1749,7 @@ int main(int argc, char **argv)
         if (reload_config) {
             // Recalculate config hash before reload (tamper detection)
             char new_config_sha256[SHA256_HEX_LEN];
-            if (!filehash_calculate(config_path, new_config_sha256, sizeof(new_config_sha256))) {
+            if (!filehash_calculate_fresh(config_path, new_config_sha256, sizeof(new_config_sha256))) {
                 strncpy(new_config_sha256, "error", sizeof(new_config_sha256));
                 new_config_sha256[sizeof(new_config_sha256) - 1] = '\0';
             }

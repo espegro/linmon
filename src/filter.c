@@ -231,6 +231,43 @@ bool filter_should_log_file(const char *filename)
     return true;  // Not in ignored paths
 }
 
+void filter_redact_argv(char *args, size_t length)
+{
+    bool redact_next = false;
+    if (!redact_enabled || !args)
+        return;
+    for (size_t offset = 0; offset < length;) {
+        char *arg = args + offset;
+        size_t len = strnlen(arg, length - offset);
+        if (len == length - offset)
+            return; // Caller must terminate even a truncated final argument.
+        if (redact_next) {
+            memset(arg, '*', len);
+            redact_next = false;
+        } else {
+            for (const char **p = space_separated_options; *p; p++)
+                if (strcmp(arg, *p) == 0)
+                    redact_next = true;
+            if (strcmp(arg, "-p") == 0)
+                redact_next = true;
+            for (const char **p = sensitive_patterns; *p; p++) {
+                size_t plen = strlen(*p);
+                if ((*p)[plen - 1] != '=')
+                    continue;
+                char *value = strstr(arg, *p);
+                if (value) {
+                    value += plen;
+                    memset(value, '*', len - (size_t)(value - arg));
+                    break;
+                }
+            }
+            if (len > 2 && arg[0] == '-' && arg[1] == 'p')
+                memset(arg + 2, '*', len - 2);
+        }
+        offset += len + 1;
+    }
+}
+
 void filter_redact_cmdline(char *cmdline, size_t size)
 {
     const char **pattern;

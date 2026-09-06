@@ -312,12 +312,6 @@ static void rotate_log_file(void)
     if (!rotation_enabled || rotation_base_path[0] == '\0')
         return;
 
-    // Close current file
-    if (log_fp) {
-        fclose(log_fp);
-        log_fp = NULL;
-    }
-
     // Rotate existing files: .9 -> .10, .8 -> .9, ..., .1 -> .2
     for (int i = rotation_max_files - 1; i >= 1; i--) {
         snprintf(old_path, sizeof(old_path), "%s.%d", rotation_base_path, i);
@@ -334,20 +328,29 @@ static void rotate_log_file(void)
 
     // Rename current to .1
     snprintf(new_path, sizeof(new_path), "%s.1", rotation_base_path);
-    rename(rotation_base_path, new_path);
+    if (rename(rotation_base_path, new_path) != 0) {
+        fprintf(stderr, "ERROR: Failed to rotate log: %s\n", strerror(errno));
+        return;
+    }
 
     // Open fresh log file with restrictive permissions
-    new_fp = safe_fopen(rotation_base_path, "a", 0640);
+    new_fp = logger_open_file_secure(rotation_base_path);
     if (!new_fp && errno == ELOOP) {
         syslog(LOG_CRIT, "SECURITY: Symlink attack detected on log rotation: %s", rotation_base_path);
     }
     if (new_fp) {
         setlinebuf(new_fp);
+        FILE *old_fp = log_fp;
         log_fp = new_fp;
+        if (old_fp)
+            fclose(old_fp);
         bytes_written = 0;
         fprintf(stderr, "Log rotated: %s\n", rotation_base_path);
     } else {
-
+        // Keep writing through the old descriptor and restore its pathname
+        // so a later event can retry rotation.
+        if (rename(new_path, rotation_base_path) != 0)
+            fprintf(stderr, "ERROR: Failed to restore log path: %s\n", strerror(errno));
         fprintf(stderr, "ERROR: Failed to reopen log after rotation: %s\n",
                 strerror(errno));
     }
@@ -398,7 +401,7 @@ void logger_replace(FILE *new_fp)
         fclose(old_fp);
 }
 
-// Check fprintf result, track bytes written, and trigger rotation if needed
+// Check fprintf result and track bytes; rotation runs between complete events.
 // Must be called with log_mutex held
 static inline bool check_fprintf_result(int ret)
 {
@@ -419,8 +422,6 @@ static inline bool check_fprintf_result(int ret)
     // Track bytes written for rotation check
     if (ret > 0) {
         bytes_written += ret;
-        // Check if rotation is needed
-        check_rotation();
     }
 
     return true;
@@ -662,6 +663,7 @@ int logger_log_process_event(const struct process_event *event)
     pthread_mutex_unlock(&seq_mutex);
 
     pthread_mutex_lock(&log_mutex);
+    check_rotation();
 
     // Write JSON header - critical section, check for errors to avoid truncated events
     int ret = fprintf(log_fp,
@@ -969,6 +971,7 @@ int logger_log_file_event(const struct file_event *event)
     pthread_mutex_unlock(&seq_mutex);
 
     pthread_mutex_lock(&log_mutex);
+    check_rotation();
 
     // Write JSON header - critical section, check for errors to avoid truncated events
     ret = fprintf(log_fp,
@@ -1103,6 +1106,7 @@ int logger_log_network_event(const struct network_event *event)
     pthread_mutex_unlock(&seq_mutex);
 
     pthread_mutex_lock(&log_mutex);
+    check_rotation();
 
     // Write JSON header - critical section, check for errors to avoid truncated events
     ret = fprintf(log_fp,
@@ -1237,6 +1241,7 @@ int logger_log_privilege_event(const struct privilege_event *event)
     pthread_mutex_unlock(&seq_mutex);
 
     pthread_mutex_lock(&log_mutex);
+    check_rotation();
 
     // Log uid field (use old_uid for consistency with other event types)
     fprintf(log_fp,
@@ -1413,6 +1418,7 @@ int logger_log_security_event(const struct security_event *event)
     pthread_mutex_unlock(&seq_mutex);
 
     pthread_mutex_lock(&log_mutex);
+    check_rotation();
 
     // Write JSON header - critical section, check for errors to avoid truncated events
     ret = fprintf(log_fp,
@@ -1720,6 +1726,7 @@ int logger_log_persistence_event(const struct persistence_event *event)
     pthread_mutex_unlock(&seq_mutex);
 
     pthread_mutex_lock(&log_mutex);
+    check_rotation();
 
     fprintf(log_fp,
             "{\"seq\":%lu,\"timestamp\":\"%s\",\"hostname\":\"%s\",\"type\":\"security_persistence\",\"pid\":%u,\"ppid\":%u,"
