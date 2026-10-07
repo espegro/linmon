@@ -153,8 +153,13 @@ int load_config(struct linmon_config *config, const char *config_file)
     // SECURITY: Check config file permissions BEFORE opening
     // This prevents TOCTOU race (check-then-open) but we accept the risk since
     // an attacker who can modify config can already compromise the system.
-    // Allow test mode to skip ownership checks for unit tests (LINMON_TEST_MODE env var)
+    // Test builds may skip root ownership checks for temporary fixtures.  Never
+    // let an environment variable weaken validation in a production binary.
+#ifdef LINMON_TEST_BUILD
     bool test_mode = getenv("LINMON_TEST_MODE") != NULL;
+#else
+    const bool test_mode = false;
+#endif
 
     fp = safe_fopen_readonly(config_file, &st);
     if (!fp) {

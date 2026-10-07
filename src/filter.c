@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <regex.h>
 
@@ -45,6 +46,16 @@ static const char *sensitive_patterns[] = {
     "private-key=",
     "credential=",
     "credentials=",
+    "aws_access_key_id=",
+    "aws_secret_access_key=",
+    "aws_session_token=",
+    "github_token=",
+    "gitlab_token=",
+    "client_id=",
+    "refresh_token=",
+    "id_token=",
+    "bearer_token=",
+    "bearer ",
     // Long options with = (--option=value)
     "--password=",
     "--passwd=",
@@ -55,6 +66,9 @@ static const char *sensitive_patterns[] = {
     "--auth=",
     "--credential=",
     "--private-key=",
+    "--client-secret=",
+    "--access-token=",
+    "--refresh-token=",
     // Short option with space (-p value)
     "-p ",
     NULL
@@ -71,8 +85,29 @@ static const char *space_separated_options[] = {
     "--auth",
     "--credential",
     "--private-key",
+    "--client-secret",
+    "--access-token",
+    "--refresh-token",
     NULL
 };
+
+static char *ascii_strcasestr(char *haystack, const char *needle)
+{
+    size_t needle_len = strlen(needle);
+
+    if (needle_len == 0)
+        return haystack;
+    for (; *haystack; haystack++) {
+        size_t i = 0;
+        while (i < needle_len && haystack[i] &&
+               tolower((unsigned char)haystack[i]) ==
+               tolower((unsigned char)needle[i]))
+            i++;
+        if (i == needle_len)
+            return haystack;
+    }
+    return NULL;
+}
 
 // Parse comma-separated list
 static char **parse_list(const char *str, int *count)
@@ -246,15 +281,15 @@ void filter_redact_argv(char *args, size_t length)
             redact_next = false;
         } else {
             for (const char **p = space_separated_options; *p; p++)
-                if (strcmp(arg, *p) == 0)
+                if (strcasecmp(arg, *p) == 0)
                     redact_next = true;
-            if (strcmp(arg, "-p") == 0)
+            if (strcasecmp(arg, "-p") == 0)
                 redact_next = true;
             for (const char **p = sensitive_patterns; *p; p++) {
                 size_t plen = strlen(*p);
                 if ((*p)[plen - 1] != '=')
                     continue;
-                char *value = strstr(arg, *p);
+                char *value = ascii_strcasestr(arg, *p);
                 if (value) {
                     value += plen;
                     memset(value, '*', len - (size_t)(value - arg));
@@ -280,7 +315,7 @@ void filter_redact_cmdline(char *cmdline, size_t size)
     // Look for each sensitive pattern (patterns where value follows immediately)
     for (pattern = sensitive_patterns; *pattern != NULL; pattern++) {
         search_start = cmdline;
-        while ((pos = strstr(search_start, *pattern)) != NULL) {
+        while ((pos = ascii_strcasestr(search_start, *pattern)) != NULL) {
             // Find the value part (after the pattern)
             pos += strlen(*pattern);
 
@@ -313,7 +348,7 @@ void filter_redact_cmdline(char *cmdline, size_t size)
         size_t pattern_len = strlen(*pattern);
         search_start = cmdline;
 
-        while ((pos = strstr(search_start, *pattern)) != NULL) {
+        while ((pos = ascii_strcasestr(search_start, *pattern)) != NULL) {
             char *after_pattern = pos + pattern_len;
 
             // Check if followed by space (not '=' which is handled above)

@@ -125,6 +125,21 @@ static void test_redact_multiple_occurrences(void)
     ASSERT_STREQ(cmdline2, "mysql -p******* --password *******");
 }
 
+static void test_redact_case_and_cloud_credentials(void)
+{
+    TEST_CASE("Redaction: case-insensitive and cloud credentials");
+
+    char cmdline[512];
+    strcpy(cmdline, "app PASSWORD=secret AWS_SECRET_ACCESS_KEY=awssecret --CLIENT-SECRET oauth Authorization: Bearer jwt.value");
+    filter_redact_cmdline(cmdline, sizeof(cmdline));
+    ASSERT_STREQ(cmdline, "app PASSWORD=****** AWS_SECRET_ACCESS_KEY=********* --CLIENT-SECRET ***** Authorization: Bearer *********");
+
+    char args[] = "app\0--TOKEN\0secret\0AWS_SESSION_TOKEN=value\0";
+    filter_redact_argv(args, sizeof(args));
+    ASSERT_STREQ(args + 12, "******");
+    ASSERT_STREQ(args + 19, "AWS_SESSION_TOKEN=*****");
+}
+
 // Test edge cases for redaction
 static void test_redact_edge_cases(void)
 {
@@ -339,6 +354,7 @@ int main(void)
     test_redact_short_option_no_space();
     test_redact_quoted_values();
     test_redact_multiple_occurrences();
+    test_redact_case_and_cloud_credentials();
     test_redact_edge_cases();
     test_redact_disabled();
     test_redact_null_handling();

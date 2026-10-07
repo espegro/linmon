@@ -53,11 +53,25 @@ fi
 
 # 2. Create log directory with proper permissions
 echo -e "${YELLOW}[2/8]${NC} Creating log directory..."
+if [ -L /var/log/linmon ] || { [ -e /var/log/linmon ] && [ ! -d /var/log/linmon ]; }; then
+    echo -e "${RED}Error: /var/log/linmon is not a real directory${NC}"
+    exit 1
+fi
 mkdir -p /var/log/linmon
-touch /var/log/linmon/events.json
-chown -R linmon:linmon /var/log/linmon
+# Lock the daemon-owned directory while inspecting and updating its contents.
+chown root:root /var/log/linmon
 chmod 0750 /var/log/linmon
-chmod 0640 /var/log/linmon/events.json
+if [ -L /var/log/linmon/events.json ] || { [ -e /var/log/linmon/events.json ] && [ ! -f /var/log/linmon/events.json ]; }; then
+    echo -e "${RED}Error: /var/log/linmon/events.json is not a regular file${NC}"
+    exit 1
+fi
+if [ ! -e /var/log/linmon/events.json ]; then
+    install -o linmon -g linmon -m 0640 /dev/null /var/log/linmon/events.json
+else
+    chown linmon:linmon /var/log/linmon/events.json
+    chmod 0640 /var/log/linmon/events.json
+fi
+chown linmon:linmon /var/log/linmon
 
 # Fix SELinux context for log directory (RHEL/Rocky/Fedora)
 if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then
@@ -70,9 +84,14 @@ echo -e "${GREEN}✓${NC} Log directory: /var/log/linmon (owner: linmon:linmon, 
 
 # 3. Create cache directory for package verification
 echo -e "${YELLOW}[3/8]${NC} Creating cache directory..."
+if [ -L /var/cache/linmon ] || { [ -e /var/cache/linmon ] && [ ! -d /var/cache/linmon ]; }; then
+    echo -e "${RED}Error: /var/cache/linmon is not a real directory${NC}"
+    exit 1
+fi
 mkdir -p /var/cache/linmon
-chown -R linmon:linmon /var/cache/linmon
+chown root:root /var/cache/linmon
 chmod 0750 /var/cache/linmon
+chown linmon:linmon /var/cache/linmon
 
 # Fix SELinux context for cache directory (RHEL/Rocky/Fedora)
 if command -v restorecon >/dev/null 2>&1 && [ -f /etc/selinux/config ]; then

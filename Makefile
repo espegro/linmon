@@ -72,7 +72,7 @@ DAEMON_OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(DAEMON_SOURCES))
 # Test configuration
 TEST_SOURCES := $(wildcard $(TEST_DIR)/*.c)
 TEST_BINS := $(patsubst $(TEST_DIR)/%.c,$(TEST_BIN_DIR)/%,$(TEST_SOURCES))
-TEST_CFLAGS := -Wall -Wextra -O2 -g $(INCLUDES)
+TEST_CFLAGS := -Wall -Wextra -O2 -g $(INCLUDES) -DLINMON_TEST_BUILD
 
 # Targets
 .PHONY: all clean install uninstall test
